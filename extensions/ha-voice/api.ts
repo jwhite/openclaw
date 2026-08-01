@@ -1,0 +1,21 @@
+// Public ha-voice API barrel exposed to plugin-local modules and tests.
+
+export {
+  createFixedWindowRateLimiter,
+  createWebhookInFlightLimiter,
+  definePluginEntry,
+  normalizeAgentId,
+  normalizeLowercaseStringOrEmpty,
+  normalizeWebhookPath,
+  readJsonWebhookBodyOrReject,
+  resolveConfiguredSecretInputString,
+  resolveRequestClientIp,
+  resolveWebhookTargetWithAuthOrReject,
+  safeEqualSecret,
+  withResolvedWebhookRequestPipeline,
+  WEBHOOK_IN_FLIGHT_DEFAULTS,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+  type OpenClawConfig,
+  type OpenClawPluginApi,
+  type WebhookInFlightLimiter,
+} from "./runtime-api.js";

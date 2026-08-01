@@ -1,0 +1,52 @@
+{
+  "id": "ha-events",
+  "name": "Home Assistant Event Ingestion",
+  "description": "Subscribes to Home Assistant's state_changed events over its WebSocket API, with automatic reconnect/backoff, so MoaBot can observe the home without being in the voice-response critical path.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "url": {
+        "type": "string"
+      },
+      "token": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": ["env", "file", "exec"]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": ["source", "provider", "id"]
+          }
+        ]
+      },
+      "domains": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "maxTrackedEvents": {
+        "type": "number"
+      }
+    },
+    "required": ["url", "token"]
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "id": "ha-voice",
+  "name": "Home Assistant Voice",
+  "description": "Authenticated webhook bridging a Home Assistant Assist pipeline to a real OpenClaw agent, so a paired voice satellite talks to the agent directly instead of HA's built-in intent-only conversation agent.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "agentId": {
+        "type": "string"
+      },
+      "sessionScope": {
+        "type": "string",
+        "enum": ["per-device", "shared"]
+      },
+      "responseSystemPrompt": {
+        "type": "string"
+      },
+      "responseTimeoutMs": {
+        "type": "number"
+      },
+      "serve": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "secret": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": ["env", "file", "exec"]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": ["source", "provider", "id"]
+          }
+        ]
+      }
+    },
+    "required": ["secret"]
+  }
+}
