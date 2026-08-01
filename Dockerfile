@@ -61,6 +61,12 @@ COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
 
 RUN corepack enable
 
+# Slow/flaky reach to the npm registry from this build host can otherwise time
+# out mid-install (seen failing on esbuild/matrix-sdk-crypto postinstall
+# downloads); raise pnpm's fetch timeout/retries for every pnpm call below.
+RUN pnpm config set fetch-timeout 600000 && \
+    pnpm config set fetch-retries 10
+
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./

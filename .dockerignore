@@ -1,6 +1,10 @@
 .git
 .worktrees
 
+# RepoQL local index cache (large DuckDB file + a live Unix socket that
+# breaks the Docker CLI's tar-based build-context stream on Windows)
+.repoql
+
 # Sensitive files – scripts/docker/setup.sh writes .env with OPENCLAW_GATEWAY_TOKEN
 # into the project root; keep it out of the build context.
 .env
