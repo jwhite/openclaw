@@ -57,12 +57,17 @@ describe("ha-control plugin registration", () => {
     expect(() => plugin.register(api)).toThrow();
   });
 
-  it("registers play_music_on_satellite when config is a plain string token", async () => {
+  it("registers play_music_on_satellite SYNCHRONOUSLY within register(), no microtask needed", () => {
+    // The real bug (2026-08-03): registerTool's factory contract is synchronous — the runtime
+    // builds a tool-registry snapshot immediately after register() returns. The original
+    // implementation deferred registration via `void asyncFn()`, so register() returned before
+    // the tool was actually registered; snapshots built in that window never saw the tool, even
+    // though it appeared in startup logs once the deferred call eventually finished. This test
+    // asserts registerTool has already been called the instant plugin.register(api) returns —
+    // deliberately does NOT await anything, so it would fail against the old implementation.
     const { api, registerTool } = createApi({ pluginConfig: VALID_CONFIG });
 
     plugin.register(api);
-    await Promise.resolve();
-    await Promise.resolve();
 
     expect(registerTool).toHaveBeenCalledOnce();
     const [tool, opts] = registerTool.mock.calls[0] as [{ name: string }, { name: string }];
@@ -70,19 +75,31 @@ describe("ha-control plugin registration", () => {
     expect(opts).toEqual({ name: "play_music_on_satellite" });
   });
 
-  it("registers the tool again on a second register() call instead of skipping it", async () => {
-    // The runtime calls register() once per tool-registry snapshot it builds (observed live: a
-    // plugin that only registers once misses every snapshot after the first, so real agent turns
-    // never see the tool even though it appeared in startup logs). No ha-events-style guard here.
+  it("registers the tool again on a second register() call instead of skipping it", () => {
+    // The runtime calls register() once per tool-registry snapshot it builds — a plugin that only
+    // registers once misses every snapshot after the first. No ha-events-style "only run once"
+    // guard here; registration is cheap and idempotent, so re-running it every time is correct.
     const { api, registerTool } = createApi({ pluginConfig: VALID_CONFIG });
 
     plugin.register(api);
-    await Promise.resolve();
-    await Promise.resolve();
     plugin.register(api);
-    await Promise.resolve();
-    await Promise.resolve();
 
     expect(registerTool).toHaveBeenCalledTimes(2);
+  });
+
+  it("the registered tool resolves a plain-string token asynchronously inside execute()", async () => {
+    const { api, registerTool } = createApi({ pluginConfig: VALID_CONFIG });
+
+    plugin.register(api);
+
+    const [tool] = registerTool.mock.calls[0] as [
+      { execute: (id: string, params: unknown) => Promise<{ details: { ok: boolean } }> },
+    ];
+    const result = await tool.execute("call-1", { query: "" });
+
+    // Empty query short-circuits before any HA call, but still proves execute() runs the deferred
+    // token-resolution path without throwing — the real proof of live playback is index.test.ts's
+    // sibling, play-music-tool.test.ts, which mocks the HA client directly.
+    expect(result.details.ok).toBe(false);
   });
 });

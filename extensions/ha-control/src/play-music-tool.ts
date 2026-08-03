@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 // Plays music on the configured satellite via Music Assistant's Home Assistant integration.
 //
 // Two real HA service calls, not one — discovered live (2026-08-03), not assumed from docs:
@@ -13,6 +12,7 @@ import { Type } from "typebox";
 // direct trial against the live HA instance, not guessed. A third gotcha, same story: passing
 // `search_options` (e.g. `{limit: 5}`) on the `search` call — a field the schema documents as
 // optional with a default — 400s the request anyway. Omit it entirely; the default applies.
+import { Type } from "typebox";
 import { jsonResult, stringEnum, type AnyAgentTool } from "../api.js";
 import { callHomeAssistantService } from "./ha-service-client.js";
 
@@ -29,7 +29,10 @@ const SEARCH_RESULT_KEY_BY_MEDIA_TYPE: Record<PlayMusicMediaType, string> = {
 
 export type PlayMusicToolDeps = {
   baseUrl: string;
-  token: string;
+  // Resolved lazily inside execute(), not eagerly before registration — see index.ts for why:
+  // registerTool's factory contract is synchronous, so any async work (secret-ref resolution)
+  // must not sit between plugin startup and the tool object being registered.
+  resolveToken: () => Promise<string>;
   defaultMediaPlayerEntityId: string;
   musicAssistantConfigEntryId: string;
 };
@@ -61,12 +64,13 @@ type MusicAssistantSearchResponse = Record<string, MusicAssistantSearchResultIte
 
 async function resolveMediaUri(
   deps: PlayMusicToolDeps,
+  token: string,
   query: string,
   mediaType: PlayMusicMediaType,
 ): Promise<string | null> {
   const response = (await callHomeAssistantService({
     baseUrl: deps.baseUrl,
-    token: deps.token,
+    token,
     domain: "music_assistant",
     service: "search",
     returnResponse: true,
@@ -99,7 +103,8 @@ export function createPlayMusicTool(deps: PlayMusicToolDeps): AnyAgentTool {
       const mediaType = readMediaType(rawParams.media_type);
 
       try {
-        const mediaUri = await resolveMediaUri(deps, query, mediaType);
+        const token = await deps.resolveToken();
+        const mediaUri = await resolveMediaUri(deps, token, query, mediaType);
         if (!mediaUri) {
           return jsonResult({
             ok: false,
@@ -109,7 +114,7 @@ export function createPlayMusicTool(deps: PlayMusicToolDeps): AnyAgentTool {
 
         await callHomeAssistantService({
           baseUrl: deps.baseUrl,
-          token: deps.token,
+          token,
           domain: "music_assistant",
           service: "play_media",
           data: {

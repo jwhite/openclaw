@@ -16,7 +16,7 @@ describe("createPlayMusicTool", () => {
     const { createPlayMusicTool } = await import("./play-music-tool.js");
     return createPlayMusicTool({
       baseUrl: "http://10.0.0.108:8123",
-      token: "test-token",
+      resolveToken: async () => "test-token",
       defaultMediaPlayerEntityId: "media_player.home_assistant_voice_0aacc1",
       musicAssistantConfigEntryId: "entry-123",
     });

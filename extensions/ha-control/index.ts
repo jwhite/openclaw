@@ -7,45 +7,45 @@ import {
 import { resolveHaControlPluginConfig, type ResolvedHaControlConfig } from "./src/config.js";
 import { createPlayMusicTool } from "./src/play-music-tool.js";
 
-// Unlike ha-events (a persistent WebSocket subscriber, guarded against opening a second
-// connection), this plugin only registers a stateless tool descriptor — cheap and idempotent.
-// register() has been observed firing more than once per process (each apparently building its
-// own tool registry snapshot), so re-registering every time is required, not just tolerated: an
-// ha-events-style "only run once" guard here silently drops the tool from every registry after
-// the first, which is exactly the bug that shipped initially (tool visible in startup logs but
-// missing from real agent turns).
-async function registerHaControlTools(
+// `registerTool`'s factory contract (OpenClawPluginToolFactory) returns AnyAgentTool
+// synchronously, not a Promise — the runtime builds a tool-registry snapshot immediately after
+// register() returns, so any registration deferred past that point (e.g. the previous
+// `void registerHaControlTools(...)` fire-and-forget pattern, copied from ha-events where it's
+// fine because a WebSocket connection has no such deadline) is invisible to any snapshot taken
+// before the deferred work finishes. Real bug hit live 2026-08-03: the tool appeared in startup
+// logs (registration eventually completed) but was missing from real conversation turns whose
+// snapshot got built first — intermittent, not deterministic, which is what made it easy to miss
+// in testing (a slow enough manual retry would "happen" to land after registration finished).
+// Fix: register the tool object synchronously in register(); resolve the token lazily (and cache
+// it, so a secret-ref config doesn't re-hit the secret store on every call) inside execute().
+async function resolveToken(
   api: OpenClawPluginApi,
   resolved: ResolvedHaControlConfig,
-): Promise<void> {
-  const token =
-    typeof resolved.token === "string"
-      ? resolved.token
-      : (
-          await resolveConfiguredSecretInputString({
-            config: api.config,
-            env: process.env,
-            value: resolved.token,
-            path: "plugins.entries.ha-control.config.token",
-          })
-        ).value;
-
-  if (!token) {
-    api.logger.error("[ha-control] could not resolve HA token — tools will not be registered");
-    return;
+): Promise<string> {
+  if (typeof resolved.token === "string") {
+    return resolved.token;
   }
+  const { value } = await resolveConfiguredSecretInputString({
+    config: api.config,
+    env: process.env,
+    value: resolved.token,
+    path: "plugins.entries.ha-control.config.token",
+  });
+  if (!value) {
+    throw new Error("[ha-control] could not resolve HA token");
+  }
+  return value;
+}
 
-  api.registerTool(
-    createPlayMusicTool({
-      baseUrl: resolved.baseUrl,
-      token,
-      defaultMediaPlayerEntityId: resolved.defaultMediaPlayerEntityId,
-      musicAssistantConfigEntryId: resolved.musicAssistantConfigEntryId,
-    }),
-    { name: "play_music_on_satellite" },
-  );
-
-  api.logger.info(`[ha-control] registered play_music_on_satellite (target: ${resolved.baseUrl})`);
+function createTokenResolver(
+  api: OpenClawPluginApi,
+  resolved: ResolvedHaControlConfig,
+): () => Promise<string> {
+  let cached: Promise<string> | undefined;
+  return () => {
+    cached ??= resolveToken(api, resolved);
+    return cached;
+  };
 }
 
 export default definePluginEntry({
@@ -55,6 +55,17 @@ export default definePluginEntry({
     "Gives MoaBot a bounded set of Home Assistant service-call actions, starting with Music Assistant playback.",
   register(api: OpenClawPluginApi) {
     const resolved = resolveHaControlPluginConfig({ pluginConfig: api.pluginConfig });
-    void registerHaControlTools(api, resolved);
+    api.registerTool(
+      createPlayMusicTool({
+        baseUrl: resolved.baseUrl,
+        resolveToken: createTokenResolver(api, resolved),
+        defaultMediaPlayerEntityId: resolved.defaultMediaPlayerEntityId,
+        musicAssistantConfigEntryId: resolved.musicAssistantConfigEntryId,
+      }),
+      { name: "play_music_on_satellite" },
+    );
+    api.logger.info(
+      `[ha-control] registered play_music_on_satellite (target: ${resolved.baseUrl})`,
+    );
   },
 });
