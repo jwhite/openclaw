@@ -1,0 +1,55 @@
+{
+  "id": "ha-control",
+  "name": "Home Assistant Control",
+  "description": "Gives MoaBot a bounded set of Home Assistant service-call actions (starting with Music Assistant playback) so voice requests can act, not just observe. Deliberately scoped, not a generic call-any-service passthrough.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["play_music_on_satellite"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "Home Assistant base URL, e.g. http://10.0.0.108:8123 (REST API, not the WebSocket URL)."
+      },
+      "token": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": ["env", "file", "exec"]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": ["source", "provider", "id"]
+          }
+        ]
+      },
+      "defaultMediaPlayerEntityId": {
+        "type": "string",
+        "description": "The Music-Assistant-owned media_player entity to target by default — NOT the native ESPHome/Voice-PE entity (e.g. media_player.home_assistant_voice_0aacc1, not ..._media_player); music_assistant.play_media's target schema only accepts entities from the music_assistant integration itself."
+      },
+      "musicAssistantConfigEntryId": {
+        "type": "string",
+        "description": "HA config_entries entry_id for the Music Assistant integration instance, required by music_assistant.search (GET /api/config/config_entries/entry, filter domain=music_assistant)."
+      }
+    },
+    "required": ["baseUrl", "token", "defaultMediaPlayerEntityId", "musicAssistantConfigEntryId"]
+  }
+}
