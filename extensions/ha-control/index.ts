@@ -6,6 +6,7 @@ import {
 } from "./api.js";
 import { resolveHaControlPluginConfig, type ResolvedHaControlConfig } from "./src/config.js";
 import { createPlayMusicTool } from "./src/play-music-tool.js";
+import { createVolumeTool } from "./src/volume-tool.js";
 
 // `registerTool`'s factory contract (OpenClawPluginToolFactory) returns AnyAgentTool
 // synchronously, not a Promise — the runtime builds a tool-registry snapshot immediately after
@@ -55,17 +56,26 @@ export default definePluginEntry({
     "Gives MoaBot a bounded set of Home Assistant service-call actions, starting with Music Assistant playback.",
   register(api: OpenClawPluginApi) {
     const resolved = resolveHaControlPluginConfig({ pluginConfig: api.pluginConfig });
+    const resolveTokenOnce = createTokenResolver(api, resolved);
     api.registerTool(
       createPlayMusicTool({
         baseUrl: resolved.baseUrl,
-        resolveToken: createTokenResolver(api, resolved),
+        resolveToken: resolveTokenOnce,
         defaultMediaPlayerEntityId: resolved.defaultMediaPlayerEntityId,
         musicAssistantConfigEntryId: resolved.musicAssistantConfigEntryId,
       }),
       { name: "play_music_on_satellite" },
     );
+    api.registerTool(
+      createVolumeTool({
+        baseUrl: resolved.baseUrl,
+        resolveToken: resolveTokenOnce,
+        defaultMediaPlayerEntityId: resolved.defaultMediaPlayerEntityId,
+      }),
+      { name: "set_satellite_volume" },
+    );
     api.logger.info(
-      `[ha-control] registered play_music_on_satellite (target: ${resolved.baseUrl})`,
+      `[ha-control] registered play_music_on_satellite, set_satellite_volume (target: ${resolved.baseUrl})`,
     );
   },
 });
