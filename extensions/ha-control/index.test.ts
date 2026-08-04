@@ -9,6 +9,7 @@ const VALID_CONFIG = {
   token: "shh",
   defaultMediaPlayerEntityId: "media_player.moa",
   musicAssistantConfigEntryId: "entry-123",
+  sleepTimerEntityId: "timer.sleep_timer",
 };
 
 function createApi(params?: { pluginConfig?: OpenClawPluginApi["pluginConfig"] }): {
@@ -57,7 +58,13 @@ describe("ha-control plugin registration", () => {
     expect(() => plugin.register(api)).toThrow();
   });
 
-  it("registers both tools SYNCHRONOUSLY within register(), no microtask needed", () => {
+  it("throws synchronously when sleepTimerEntityId is missing", () => {
+    const { sleepTimerEntityId: _omit, ...rest } = VALID_CONFIG;
+    const { api } = createApi({ pluginConfig: rest });
+    expect(() => plugin.register(api)).toThrow();
+  });
+
+  it("registers all three tools SYNCHRONOUSLY within register(), no microtask needed", () => {
     // The real bug (2026-08-03): registerTool's factory contract is synchronous — the runtime
     // builds a tool-registry snapshot immediately after register() returns. The original
     // implementation deferred registration via `void asyncFn()`, so register() returned before
@@ -69,12 +76,12 @@ describe("ha-control plugin registration", () => {
 
     plugin.register(api);
 
-    expect(registerTool).toHaveBeenCalledTimes(2);
+    expect(registerTool).toHaveBeenCalledTimes(3);
     const names = registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name);
-    expect(names).toEqual(["play_music_on_satellite", "set_satellite_volume"]);
+    expect(names).toEqual(["play_music_on_satellite", "set_satellite_volume", "set_sleep_timer"]);
   });
 
-  it("registers both tools again on a second register() call instead of skipping them", () => {
+  it("registers all three tools again on a second register() call instead of skipping them", () => {
     // The runtime calls register() once per tool-registry snapshot it builds — a plugin that only
     // registers once misses every snapshot after the first. No ha-events-style "only run once"
     // guard here; registration is cheap and idempotent, so re-running it every time is correct.
@@ -83,7 +90,7 @@ describe("ha-control plugin registration", () => {
     plugin.register(api);
     plugin.register(api);
 
-    expect(registerTool).toHaveBeenCalledTimes(4);
+    expect(registerTool).toHaveBeenCalledTimes(6);
   });
 
   it("the registered tool resolves a plain-string token asynchronously inside execute()", async () => {

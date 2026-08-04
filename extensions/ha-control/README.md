@@ -8,19 +8,28 @@ deliberate re: what writes MoaBot can take unprompted.
 
 ## What it does today
 
-Two tools, both targeting `defaultMediaPlayerEntityId`:
+Three tools:
 
-- **`play_music_on_satellite`** — starts playback via Music Assistant's `music_assistant.play_media`
-  HA service (artist/album/track/playlist/audiobook by name). `media_id` is a required URI, not a
-  free-text string — free text resolves through a separate `music_assistant.search` call first; see
-  `src/play-music-tool.ts`'s header comment for the full list of gotchas found live (wrong service
-  domain in early docs, required-URI `media_id`, wrong target entity, `search_options` 400ing).
-- **`set_satellite_volume`** — absolute (0-100%) or relative (up/down) volume, via HA's standard
-  `media_player.volume_set`/`volume_up`/`volume_down` — core HA services, none of the Music
-  Assistant-specific gotchas apply.
+- **`play_music_on_satellite`** (targets `defaultMediaPlayerEntityId`) — starts playback via Music
+  Assistant's `music_assistant.play_media` HA service (artist/album/track/playlist/audiobook by
+  name). `media_id` is a required URI, not a free-text string — free text resolves through a
+  separate `music_assistant.search` call first; see `src/play-music-tool.ts`'s header comment for
+  the full list of gotchas found live (wrong service domain in early docs, required-URI `media_id`,
+  wrong target entity, `search_options` 400ing).
+- **`set_satellite_volume`** (targets `defaultMediaPlayerEntityId`) — absolute (0-100%) or relative
+  (up/down) volume, via HA's standard `media_player.volume_set`/`volume_up`/`volume_down` — core HA
+  services, none of the Music Assistant-specific gotchas apply.
+- **`set_sleep_timer`** (targets `sleepTimerEntityId`) — starts/cancels a countdown via HA's
+  standard `timer.start`/`timer.cancel`. This tool only manages the countdown; a separate HA
+  automation (`sleep_timer_pause_playback`, in `automations.yaml`) handles `timer.finished` →
+  `media_player.media_pause`. The `timer.sleep_timer` helper itself lives in HA's
+  `configuration.yaml` (`restore: true` so it survives an HA restart) — `timer` helpers aren't
+  config-entry/UI-creatable on this HA instance (confirmed live: not in
+  `GET /api/config/config_entries/flow_handlers`), so it's YAML-only, not something this plugin
+  can create for you.
 
-Both plays immediately, no confirmation gate (Operator decision, 2026-08-03: low-stakes, easily
-reversible).
+All three play/act immediately, no confirmation gate (Operator decision, 2026-08-03: low-stakes,
+easily reversible).
 
 Routes through **Home Assistant's REST API**, not Music Assistant's own API directly — reuses the
 same HA access `ha-events` already has (long-lived token) rather than adding a second
@@ -33,7 +42,8 @@ credential/connection just for playback.
   "baseUrl": "http://10.0.0.108:8123",
   "token": { "source": "env", "provider": "infisical", "id": "..." },
   "defaultMediaPlayerEntityId": "media_player.home_assistant_voice_0aacc1",
-  "musicAssistantConfigEntryId": "01KZ009H59A4M6ZRME5HESBGQ5"
+  "musicAssistantConfigEntryId": "01KZ009H59A4M6ZRME5HESBGQ5",
+  "sleepTimerEntityId": "timer.sleep_timer"
 }
 ```
 
@@ -80,6 +90,6 @@ integration instance — find it via `GET /api/config/config_entries/entry`, fil
 
 ## Extending
 
-`S1.3` (sleep timer) in the `spotify-playback` project is expected to add a tool here
-(`timer.start`/`timer.cancel`) reusing `callHomeAssistantService` rather than building separate
-HA-write plumbing.
+`S1.4` (voice volume) and `S1.5` (voice-triggered playback) and `S1.3` (sleep timer) — all of
+Sprint 1's Musts that need HA writes — are now built here, all reusing
+`callHomeAssistantService` rather than each building separate HA-write plumbing.

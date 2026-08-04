@@ -6,6 +6,7 @@ import {
 } from "./api.js";
 import { resolveHaControlPluginConfig, type ResolvedHaControlConfig } from "./src/config.js";
 import { createPlayMusicTool } from "./src/play-music-tool.js";
+import { createSleepTimerTool } from "./src/sleep-timer-tool.js";
 import { createVolumeTool } from "./src/volume-tool.js";
 
 // `registerTool`'s factory contract (OpenClawPluginToolFactory) returns AnyAgentTool
@@ -74,8 +75,16 @@ export default definePluginEntry({
       }),
       { name: "set_satellite_volume" },
     );
+    api.registerTool(
+      createSleepTimerTool({
+        baseUrl: resolved.baseUrl,
+        resolveToken: resolveTokenOnce,
+        timerEntityId: resolved.sleepTimerEntityId,
+      }),
+      { name: "set_sleep_timer" },
+    );
     api.logger.info(
-      `[ha-control] registered play_music_on_satellite, set_satellite_volume (target: ${resolved.baseUrl})`,
+      `[ha-control] registered play_music_on_satellite, set_satellite_volume, set_sleep_timer (target: ${resolved.baseUrl})`,
     );
   },
 });

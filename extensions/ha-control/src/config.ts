@@ -19,6 +19,7 @@ export const haControlPluginConfigSchema = z
     token: tokenInputSchema,
     defaultMediaPlayerEntityId: z.string().trim().min(1),
     musicAssistantConfigEntryId: z.string().trim().min(1),
+    sleepTimerEntityId: z.string().trim().min(1),
   })
   .strict();
 
@@ -29,6 +30,7 @@ export type ResolvedHaControlConfig = {
   token: HaControlTokenInput;
   defaultMediaPlayerEntityId: string;
   musicAssistantConfigEntryId: string;
+  sleepTimerEntityId: string;
 };
 
 export function resolveHaControlPluginConfig(params: {
@@ -40,5 +42,6 @@ export function resolveHaControlPluginConfig(params: {
     token: parsed.token,
     defaultMediaPlayerEntityId: parsed.defaultMediaPlayerEntityId,
     musicAssistantConfigEntryId: parsed.musicAssistantConfigEntryId,
+    sleepTimerEntityId: parsed.sleepTimerEntityId,
   };
 }

@@ -6,7 +6,7 @@
     "onStartup": true
   },
   "contracts": {
-    "tools": ["play_music_on_satellite", "set_satellite_volume"]
+    "tools": ["play_music_on_satellite", "set_satellite_volume", "set_sleep_timer"]
   },
   "configSchema": {
     "type": "object",
@@ -48,8 +48,18 @@
       "musicAssistantConfigEntryId": {
         "type": "string",
         "description": "HA config_entries entry_id for the Music Assistant integration instance, required by music_assistant.search (GET /api/config/config_entries/entry, filter domain=music_assistant)."
+      },
+      "sleepTimerEntityId": {
+        "type": "string",
+        "description": "The timer helper entity this tool starts/cancels, e.g. timer.sleep_timer. Defined in HA's configuration.yaml (restore: true so it survives a restart); a separate HA automation handles the actual timer.finished -> media_player.media_pause step, not this plugin."
       }
     },
-    "required": ["baseUrl", "token", "defaultMediaPlayerEntityId", "musicAssistantConfigEntryId"]
+    "required": [
+      "baseUrl",
+      "token",
+      "defaultMediaPlayerEntityId",
+      "musicAssistantConfigEntryId",
+      "sleepTimerEntityId"
+    ]
   }
 }
