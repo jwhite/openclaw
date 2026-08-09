@@ -6,7 +6,6 @@ import {
   type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -214,7 +213,7 @@ export async function prepareSessionPatchArchive(params: {
       sessionId: fresh.entry?.sessionId,
       sessionKey: freshCanonicalKey,
       agentId: freshResolved.agentId,
-      defaultAgentId: resolveDefaultAgentId(cfg),
+      defaultAgentId: freshResolved.agentId,
       lifecycleIdentities: target.lifecycleIdentities.filter((identity): identity is string =>
         Boolean(identity),
       ),
