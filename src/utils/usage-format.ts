@@ -318,6 +318,8 @@ function resolveCostAgentDir(config?: OpenClawConfig, agentDir?: string): string
   }
   if (config && listAgentEntries(config).length > 0) {
     const soleAgentId = tryResolveSoleAgentId(config);
+    // An explicit multi-agent fleet has no shared models.json owner;
+    // undefined skips that optional pricing source.
     return soleAgentId ? resolveAgentDir(config, soleAgentId) : undefined;
   }
   // Config-less and pricing-only lookups are shipped APIs for the historical
