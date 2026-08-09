@@ -276,7 +276,7 @@ export async function finishGatewayStartup(params: {
             return loadGatewayStartupPluginRuntime({
               cfg: gatewayPluginConfigAtStart,
               activationSourceConfig: startupActivationSourceConfig,
-              workspaceDir: defaultWorkspaceDir,
+              workspaceDir: runtime.pluginWorkspaceDir,
               log,
               baseMethods,
               coreGatewayMethodNames,
