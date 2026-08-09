@@ -5,10 +5,10 @@ import {
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   emitDiagnosticsTimelineEvent,
@@ -524,15 +524,18 @@ export async function handleChatSend(
                       // Register for any other active runs *in the same session* so
                       // late-joining clients (e.g. page refresh mid-response) receive
                       // in-progress tool events without leaking cross-session data.
-                      const defaultAgentId = resolveDefaultAgentId(cfg);
+                      const compatibilityAgentId =
+                        sessionKey === "global"
+                          ? tryResolveLegacyCompatibilityAgentId(cfg)
+                          : undefined;
                       const selectedGlobalAgentId =
                         sessionKey === "global"
-                          ? (selectedAgent.agentId ?? defaultAgentId)
+                          ? (selectedAgent.agentId ?? compatibilityAgentId)
                           : undefined;
                       for (const [activeRunId, active] of context.chatAbortControllers) {
                         const activeGlobalAgentId =
                           active.sessionKey === "global"
-                            ? (active.agentId ?? defaultAgentId)
+                            ? (active.agentId ?? compatibilityAgentId)
                             : undefined;
                         const sameSelectedGlobalAgent =
                           sessionKey === "global" &&
