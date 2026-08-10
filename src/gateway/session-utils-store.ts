@@ -152,6 +152,7 @@ function loadSessionEntryWithMode(
       : canonicalMatch?.entry;
   return {
     cfg,
+    agentId: target.agentId,
     storePath,
     store,
     entry,
