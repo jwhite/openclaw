@@ -189,6 +189,9 @@ export function readAcpSessionMeta(params: {
     env: params.env,
     clone: false,
   });
+  if (!storeEntry.storePath) {
+    return undefined;
+  }
   const database = openOpenClawStateDatabase({
     env: params.env,
     path: params.databasePath,
@@ -446,6 +449,9 @@ export function readAcpSessionEntry(params: {
     return null;
   }
   const storeEntry = readSessionEntryFromStore(params);
+  if (!storeEntry.storePath) {
+    return null;
+  }
   const database = openOpenClawStateDatabase({
     env: params.env,
     path: params.databasePath,
@@ -489,6 +495,9 @@ export async function listAcpSessionEntries(params: {
       cfg,
       env: params.env,
     });
+    if (!storePath) {
+      continue;
+    }
     let storeSessionKey: string;
     let entry: SessionEntry | undefined;
     try {
@@ -597,6 +606,9 @@ export async function upsertAcpSessionMeta(params: {
     env: params.env,
     clone: false,
   });
+  if (!storeEntry.storePath) {
+    return null;
+  }
   const { entry } = storeEntry;
   const storageSessionKey = storeEntry.storeSessionKey;
   let current: SessionAcpMeta | undefined;
