@@ -53,6 +53,7 @@ function buildAskUserPromptPayload(
   toolCallId: string,
   sessionKey: string | undefined,
   runId: string,
+  agentId: string | undefined,
   args: unknown,
 ) {
   try {
@@ -61,6 +62,7 @@ function buildAskUserPromptPayload(
       toolCallId,
       sessionKey,
       runId,
+      agentId,
       questions,
       timeoutSeconds,
     });
@@ -326,11 +328,22 @@ export function handleToolExecutionStart(
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
+      ? buildAskUserPromptPayload(
+          evt.toolCallId,
+          ctx.params.sessionKey,
+          ctx.params.runId,
+          ctx.params.agentId,
+          evt.args,
+        )
       : undefined;
   const cancelAskUserPromptReservation = () => {
     if (askUserPromptReservation) {
-      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId);
+      cancelAskUserPromptDelivery(
+        evt.toolCallId,
+        ctx.params.sessionKey,
+        ctx.params.runId,
+        ctx.params.agentId,
+      );
     }
   };
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {

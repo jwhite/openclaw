@@ -2,21 +2,26 @@ import type {
   SessionsCompanionAskResult,
   SessionsCompanionStateResult,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import {
   createSessionCompanionAskRuntime,
   type SessionCompanionAskDeps,
 } from "./session-companion-ask.js";
 import type { SessionCompanionThread } from "./session-companion-state.js";
+import { sessionObserverScopeKey } from "./session-observer-model.js";
 import { onGatewaySessionReset } from "./session-reset-notifications.js";
+
+type SessionCompanionTarget = { sessionKey: string; agentId: string };
 
 export type SessionCompanionService = {
   ask: (params: {
+    agentId: string;
     sessionKey: string;
     question: string;
     connId: string;
   }) => Promise<SessionsCompanionAskResult>;
-  state: (sessionKey: string) => SessionsCompanionStateResult;
-  reset: (sessionKey: string) => void;
+  state: (target: SessionCompanionTarget) => SessionsCompanionStateResult;
+  reset: (target: SessionCompanionTarget) => void;
   dispose: () => void;
 };
 
@@ -41,31 +46,41 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     isDisposed: () => disposed,
   });
 
-  const reset = (sessionKey: string) => {
-    const key = sessionKey.trim();
-    if (!key) {
+  const reset = (target: SessionCompanionTarget) => {
+    const sessionKey = target.sessionKey.trim();
+    const agentId = target.agentId.trim();
+    if (!sessionKey || !agentId) {
       return;
     }
-    askRuntime.cancel(key);
+    const key = sessionObserverScopeKey(sessionKey, agentId);
+    askRuntime.cancel(sessionKey, agentId);
     threads.delete(key);
   };
 
   const sweep = () => {
     const cutoff = now() - SESSION_COMPANION_IDLE_TTL_MS;
-    for (const [sessionKey, thread] of threads) {
+    for (const [key, thread] of threads) {
       if (!thread.busy && thread.lastUsedAt <= cutoff) {
-        reset(sessionKey);
+        threads.delete(key);
       }
     }
   };
   const sweepTimer = setIntervalFn(sweep, SESSION_COMPANION_SWEEP_INTERVAL_MS);
   sweepTimer.unref?.();
-  const unsubscribeReset = onGatewaySessionReset(reset);
+  const unsubscribeReset = onGatewaySessionReset((sessionKey, suppliedAgentId) => {
+    let agentId = suppliedAgentId;
+    try {
+      agentId ??= resolveSessionAgentId({ sessionKey, config: deps.getConfig() });
+    } catch {
+      return;
+    }
+    reset({ sessionKey, agentId });
+  });
 
   return {
     ask: askRuntime.ask,
-    state(sessionKey) {
-      const key = sessionKey.trim();
+    state(target) {
+      const key = sessionObserverScopeKey(target.sessionKey.trim(), target.agentId.trim());
       const thread = threads.get(key);
       if (!thread) {
         return { exchanges: [] };

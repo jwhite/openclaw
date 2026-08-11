@@ -35,6 +35,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 import type { GatewayAgentOwnership } from "./agent-list.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveGatewaySessionThinkingDefault } from "./session-utils-model.js";
 import {
   resolveGatewaySessionStoreTarget,
@@ -102,8 +103,12 @@ function readAcpMetaForDeletedAgentCheck(params: {
   directKeys.add(params.sessionKey);
 
   for (const directKey of directKeys) {
+    const agentId =
+      parseAgentSessionKey(directKey)?.agentId ??
+      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, directKey);
     const acpMeta = readAcpSessionMetaForEntry({
       sessionKey: directKey,
+      ...(agentId ? { agentId } : {}),
       entry: params.entry ?? undefined,
     });
     if (acpMeta) {
@@ -116,8 +121,12 @@ function readAcpMetaForDeletedAgentCheck(params: {
     candidateSessionKeys: directKeys,
     entry: params.entry ?? undefined,
   });
+  const finalAgentId =
+    parseAgentSessionKey(params.sessionKey)?.agentId ??
+    tryResolveSessionCompatibilityOwnerAgentId(params.cfg, params.sessionKey);
   return readAcpSessionMetaForEntry({
     sessionKey: params.sessionKey,
+    ...(finalAgentId ? { agentId: finalAgentId } : {}),
     entry: params.entry ?? undefined,
   });
 }

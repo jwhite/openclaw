@@ -281,6 +281,11 @@ describe("sessions-list-tool", () => {
               kind: "group",
               sessionId: "sess-malformed-agent",
             },
+            {
+              key: "Agent::discord:channel:C456",
+              kind: "group",
+              sessionId: "sess-malformed-agent-mixed-case",
+            },
           ],
         };
       }

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   readBtwTranscriptMessages,
   resolveBtwSessionTranscriptPath,
@@ -28,6 +28,7 @@ import {
   type SessionCompanionThread,
 } from "./session-companion-state.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
+import { sessionObserverScopeKey } from "./session-observer-model.js";
 import { loadSessionEntryReadOnly } from "./session-utils.js";
 
 const companionLog = createSubsystemLogger("gateway/session-companion");
@@ -63,7 +64,10 @@ type SessionCompanionRunParams = {
 export type SessionCompanionAskDeps = {
   getConfig: () => OpenClawConfig;
   sessionObserver: {
-    getCompanionSnapshot: (sessionKey: string) => SessionObserverCompanionSnapshot;
+    getCompanionSnapshot: (
+      sessionKey: string,
+      agentId?: string,
+    ) => SessionObserverCompanionSnapshot;
   };
   resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   readSeedMessages?: (params: {
@@ -394,17 +398,20 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
 
   const ask = async (request: {
+    agentId: string;
     sessionKey: string;
     question: string;
     connId: string;
   }): Promise<{ answer: string; ts: number }> => {
     const sessionKey = request.sessionKey.trim();
+    const agentId = request.agentId.trim();
     const question = request.question.trim();
-    if (!sessionKey || !question || params.isDisposed()) {
+    if (!sessionKey || !agentId || !question || params.isDisposed()) {
       throw new SessionCompanionAskError("unavailable", "Session companion is unavailable.");
     }
-    const existing = params.threads.get(sessionKey);
-    if (existing?.busy || controllers.has(sessionKey)) {
+    const threadKey = sessionObserverScopeKey(sessionKey, agentId);
+    const existing = params.threads.get(threadKey);
+    if (existing?.busy || controllers.has(threadKey)) {
       throw new SessionCompanionAskError(
         "busy",
         "The session companion is answering another question.",
@@ -446,8 +453,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     }
 
     const cfg = params.getConfig();
-    const observerSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey);
-    const agentId = observerSnapshot.agentId || resolveSessionAgentId({ sessionKey, config: cfg });
+    const observerSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey, agentId);
     const utilityModelRef = resolveUtilityModelRef({ cfg, agentId });
     if (!utilityModelRef) {
       throw new SessionCompanionAskError(
@@ -465,13 +471,13 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     };
     const created = !existing;
     if (created) {
-      params.threads.set(sessionKey, thread);
+      params.threads.set(threadKey, thread);
     }
     thread.busy = true;
     thread.lastUsedAt = admittedAt;
     admissions.push({ connId: request.connId, admittedAt });
     const controller = new AbortController();
-    controllers.set(sessionKey, controller);
+    controllers.set(threadKey, controller);
     const timeout = setTimeoutFn(() => controller.abort(), ASK_TIMEOUT_MS);
     const aborted = new Promise<never>((_resolve, reject) => {
       controller.signal.addEventListener(
@@ -487,7 +493,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
           digestJson: JSON.stringify(observerSnapshot.digest ?? null),
         };
       }
-      const currentSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey);
+      const currentSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey, agentId);
       const delta = selectDeltaNotes(currentSnapshot, thread.lastNoteSequence);
       const messages = composePromptMessages({
         thread,
@@ -511,7 +517,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       if (
         controller.signal.aborted ||
         params.isDisposed() ||
-        params.threads.get(sessionKey) !== thread
+        params.threads.get(threadKey) !== thread
       ) {
         throw new Error("session companion ask is no longer active");
       }
@@ -527,8 +533,8 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       thread.lastUsedAt = ts;
       return { answer, ts };
     } catch (error) {
-      if (created && params.threads.get(sessionKey) === thread && thread.exchanges.length === 0) {
-        params.threads.delete(sessionKey);
+      if (created && params.threads.get(threadKey) === thread && thread.exchanges.length === 0) {
+        params.threads.delete(threadKey);
       }
       companionLog.warn("session companion ask failed", { sessionKey, error });
       throw new SessionCompanionAskError(
@@ -537,10 +543,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       );
     } finally {
       clearTimeoutFn(timeout);
-      if (controllers.get(sessionKey) === controller) {
-        controllers.delete(sessionKey);
+      if (controllers.get(threadKey) === controller) {
+        controllers.delete(threadKey);
       }
-      if (params.threads.get(sessionKey) === thread) {
+      if (params.threads.get(threadKey) === thread) {
         thread.busy = false;
       }
     }
@@ -548,8 +554,8 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
 
   return {
     ask,
-    cancel(sessionKey: string) {
-      controllers.get(sessionKey)?.abort();
+    cancel(sessionKey: string, agentId: string) {
+      controllers.get(sessionObserverScopeKey(sessionKey, agentId))?.abort();
     },
     dispose() {
       for (const controller of controllers.values()) {

@@ -416,6 +416,7 @@ export function createSessionsHistoryTool(opts?: {
           : inputStoreOwner.kind === "configured"
             ? { agentId: inputStoreOwner.agentId }
             : {}),
+        keyAgentId: requesterAgentId,
         alias,
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
@@ -429,6 +430,7 @@ export function createSessionsHistoryTool(opts?: {
         action: "history",
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
+        requesterAgentId,
         restrictToSpawned,
         visibilitySessionKey: sessionKeyParam,
         callGateway: gatewayCall,

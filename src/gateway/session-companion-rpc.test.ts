@@ -12,12 +12,13 @@ async function invoke(
     reset?: ReturnType<typeof vi.fn>;
   },
   client: { connId?: string } = { connId: "conn-1" },
+  config: Record<string, unknown> = { agents: { list: [{ id: "main" }] } },
 ) {
   const respond = vi.fn();
   await sessionCompanionHandlers[method]?.({
     params,
     client,
-    context: { sessionCompanion: companion },
+    context: { sessionCompanion: companion, getRuntimeConfig: () => config },
     respond,
   } as never);
   return respond;
@@ -33,6 +34,7 @@ describe("session companion RPC", () => {
     );
 
     expect(ask).toHaveBeenCalledWith({
+      agentId: "main",
       sessionKey: "agent:main:main",
       question: "What is happening?",
       connId: "conn-1",
@@ -104,7 +106,7 @@ describe("session companion RPC", () => {
       { sessionKey: "agent:main:main" },
       { state },
     );
-    expect(state).toHaveBeenCalledWith("agent:main:main");
+    expect(state).toHaveBeenCalledWith({ agentId: "main", sessionKey: "agent:main:main" });
     expect(respond).toHaveBeenCalledWith(true, {
       exchanges: [{ question: "Why?", answer: "Because.", ts: 10 }],
     });
@@ -124,7 +126,7 @@ describe("session companion RPC", () => {
       { sessionKey: "agent:main:main" },
       { reset },
     );
-    expect(reset).toHaveBeenCalledWith("agent:main:main");
+    expect(reset).toHaveBeenCalledWith({ agentId: "main", sessionKey: "agent:main:main" });
     expect(respond).toHaveBeenCalledWith(true, { ok: true });
 
     const invalid = await invoke(
@@ -133,6 +135,35 @@ describe("session companion RPC", () => {
       { reset },
     );
     expect(invalid).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
+  it("threads an explicit owner for a bare key and returns typed selection errors", async () => {
+    const config = { agents: { ownership: "explicit", list: [{ id: "main" }, { id: "work" }] } };
+    const state = vi.fn(() => ({ exchanges: [] }));
+    const selected = await invoke(
+      "sessions.companion.state",
+      { sessionKey: "global", agentId: "work" },
+      { state },
+      undefined,
+      config,
+    );
+    expect(state).toHaveBeenCalledWith({ agentId: "work", sessionKey: "global" });
+    expect(selected).toHaveBeenCalledWith(true, { exchanges: [] });
+
+    state.mockClear();
+    const ambiguous = await invoke(
+      "sessions.companion.state",
+      { sessionKey: "global" },
+      { state },
+      undefined,
+      config,
+    );
+    expect(state).not.toHaveBeenCalled();
+    expect(ambiguous).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
