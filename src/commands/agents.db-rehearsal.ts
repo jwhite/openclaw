@@ -68,13 +68,15 @@ type InventoryRequest = {
   configPath: string;
 };
 
-type RehearsalRequest = {
+type RehearsalRequestBase = {
   schemaVersion: 1;
-  mode: "migrate" | "read-only";
   privateStateRoot: string;
   agents: AgentDatabaseRequest[];
   pluginPersistence: PluginPersistenceDeclaration[];
 };
+
+type RehearsalRequest = RehearsalRequestBase &
+  ({ mode: "migrate" } | { mode: "read-only" });
 
 type ParsedRequest = InventoryRequest | RehearsalRequest;
 
