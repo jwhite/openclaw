@@ -58,6 +58,7 @@ type PluginPersistenceDeclaration = {
 type AgentDatabaseRequest = {
   agentId: string;
   copiedPath: string;
+  creation: "existing" | "fresh";
 };
 
 type InventoryRequest = {
@@ -87,6 +88,7 @@ type DatabaseSnapshot = {
 
 type PreparedAgentDatabase = {
   agentId: string;
+  creation: "existing" | "fresh";
   requestedPath: string;
   resolvedPath: string;
   realPath: string;
@@ -184,9 +186,14 @@ function parseRequest(value: unknown): ParsedRequest {
     if (!isRecord(entry)) {
       fail("invalid-request", `agents[${index}] must be an object.`);
     }
+    const creation = entry.creation;
+    if (creation !== "existing" && creation !== "fresh") {
+      fail("invalid-request", `agents[${index}].creation must be existing or fresh.`);
+    }
     return {
       agentId: normalizeAgentId(requiredString(entry, "agentId")),
       copiedPath: requiredString(entry, "copiedPath"),
+      creation,
     };
   });
   return {
@@ -321,6 +328,17 @@ function inspectDatabaseSnapshot(pathname: string): DatabaseSnapshot {
   }
 }
 
+function hasApplicationSchema(pathname: string): boolean {
+  const database = openNodeSqliteDatabase(pathname, { readOnly: true });
+  try {
+    return Boolean(
+      database.prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get(),
+    );
+  } finally {
+    database.close();
+  }
+}
+
 function prepareAgentDatabases(
   request: RehearsalRequest,
   root: { resolved: string; real: string },
@@ -346,12 +364,37 @@ function prepareAgentDatabases(
       );
     }
     seen.add(compositeKey);
+    const before = inspectDatabaseSnapshot(realPath);
+    const ownerMatches =
+      before.role === "agent" &&
+      before.ownerAgentId !== null &&
+      normalizeAgentId(before.ownerAgentId) === entry.agentId;
+    if (request.mode === "migrate" && entry.creation === "fresh") {
+      if (
+        before.userVersion !== 0 ||
+        before.metadataSchemaVersion !== null ||
+        before.role !== null ||
+        before.ownerAgentId !== null ||
+        hasApplicationSchema(realPath)
+      ) {
+        fail(
+          "fresh-database-not-empty",
+          `agents[${index}] is marked fresh but already contains application schema or ownership.`,
+        );
+      }
+    } else if (!ownerMatches) {
+      fail(
+        "agent-owner-mismatch",
+        `agents[${index}] must be owned by agent ${entry.agentId} for ${request.mode} mode.`,
+      );
+    }
     return {
       agentId: entry.agentId,
+      creation: entry.creation,
       requestedPath,
       resolvedPath: requestedPath,
       realPath,
-      before: inspectDatabaseSnapshot(realPath),
+      before,
     };
   });
 }

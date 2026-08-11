@@ -168,7 +168,9 @@ describe("agents database rehearsal", () => {
         schemaVersion: 1,
         mode: "migrate",
         privateStateRoot: root,
-        agents: [{ agentId: "main", copiedPath: path.join(root, "missing.sqlite") }],
+        agents: [
+          { agentId: "main", copiedPath: path.join(root, "missing.sqlite"), creation: "existing" },
+        ],
         pluginPersistence: [
           { pluginId: "custom-store", kind: "sqlite", copiedPath: "/outside/plugin.sqlite" },
         ],
@@ -187,7 +189,7 @@ describe("agents database rehearsal", () => {
       schemaVersion: 1,
       mode: "migrate",
       privateStateRoot: root,
-      agents: [{ agentId: "main", copiedPath: databasePath }],
+      agents: [{ agentId: "main", copiedPath: databasePath, creation: "fresh" }],
       pluginPersistence: [],
     })) as Extract<RehearsalSuccess, { mode: "migrate" }>;
 
@@ -199,6 +201,63 @@ describe("agents database rehearsal", () => {
     });
     expect(result.privateStateRoot).toBe(root);
     expect(fs.existsSync(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root }))).toBe(true);
+
+    const readback = (await runAgentDatabaseRehearsal({
+      schemaVersion: 1,
+      mode: "read-only",
+      privateStateRoot: root,
+      agents: [{ agentId: "main", copiedPath: databasePath, creation: "fresh" }],
+      pluginPersistence: [],
+    })) as Extract<RehearsalSuccess, { mode: "read-only" }>;
+    expect(readback.agents[0]).toMatchObject({
+      creation: "fresh",
+      migrated: false,
+      before: { role: "agent", ownerAgentId: "main" },
+      after: { role: "agent", ownerAgentId: "main" },
+    });
+  });
+
+  it("rejects fresh provenance for an already-owned database", async () => {
+    const sourceRoot = await makeRoot();
+    const source = createAgentDatabase({
+      root: sourceRoot,
+      agentId: "main",
+      relativePath: "source/openclaw-agent.sqlite",
+    });
+    closeOpenClawStateDatabaseForTest();
+    const root = await makeRoot();
+    const copiedPath = path.join(root, "copy", "openclaw-agent.sqlite");
+    await fsp.mkdir(path.dirname(copiedPath), { recursive: true });
+    await fsp.copyFile(source, copiedPath);
+
+    await expect(
+      runAgentDatabaseRehearsal({
+        schemaVersion: 1,
+        mode: "migrate",
+        privateStateRoot: root,
+        agents: [{ agentId: "main", copiedPath, creation: "fresh" }],
+        pluginPersistence: [],
+      }),
+    ).rejects.toMatchObject({ code: "fresh-database-not-empty" });
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root }))).toBe(false);
+  });
+
+  it("rejects existing provenance for an unowned database", async () => {
+    const root = await makeRoot();
+    const copiedPath = path.join(root, "copy", "openclaw-agent.sqlite");
+    await fsp.mkdir(path.dirname(copiedPath), { recursive: true });
+    new DatabaseSync(copiedPath).close();
+
+    await expect(
+      runAgentDatabaseRehearsal({
+        schemaVersion: 1,
+        mode: "migrate",
+        privateStateRoot: root,
+        agents: [{ agentId: "main", copiedPath, creation: "existing" }],
+        pluginPersistence: [],
+      }),
+    ).rejects.toMatchObject({ code: "agent-owner-mismatch" });
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root }))).toBe(false);
   });
 
   it("migrates every explicit composite row and replaces stale private registry rows", async () => {
@@ -227,8 +286,8 @@ describe("agents database rehearsal", () => {
       mode: "migrate",
       privateStateRoot: root,
       agents: [
-        { agentId: "main", copiedPath: first },
-        { agentId: "main", copiedPath: second },
+        { agentId: "main", copiedPath: first, creation: "existing" },
+        { agentId: "main", copiedPath: second, creation: "existing" },
       ],
       pluginPersistence: [],
     })) as Extract<RehearsalSuccess, { mode: "migrate" }>;
@@ -280,7 +339,7 @@ describe("agents database rehearsal", () => {
       schemaVersion: 1,
       mode: "read-only",
       privateStateRoot: root,
-      agents: [{ agentId: "main", copiedPath: databasePath }],
+      agents: [{ agentId: "main", copiedPath: databasePath, creation: "existing" }],
       pluginPersistence: [],
     })) as Extract<RehearsalSuccess, { mode: "read-only" }>;
 
@@ -313,7 +372,7 @@ describe("agents database rehearsal", () => {
         schemaVersion: 1,
         mode: "migrate",
         privateStateRoot: root,
-        agents: [{ agentId: "main", copiedPath: alias }],
+        agents: [{ agentId: "main", copiedPath: alias, creation: "existing" }],
         pluginPersistence: [],
       }),
     ).rejects.toMatchObject({ code: "path-not-private" });
@@ -335,7 +394,7 @@ describe("agents database rehearsal", () => {
         schemaVersion: 1,
         mode: "read-only",
         privateStateRoot: root,
-        agents: [{ agentId: "main", copiedPath: databasePath }],
+        agents: [{ agentId: "main", copiedPath: databasePath, creation: "existing" }],
         pluginPersistence: [],
       }),
     ).rejects.toMatchObject({ code: "path-escape" });
