@@ -1223,6 +1223,160 @@ describe("runEmbeddedAgent", () => {
     );
   });
 
+  it("carries a successful hidden target projection into the terminal receipt", async () => {
+    const sessionFile = nextSessionCompatibilityKey();
+    const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+    runEmbeddedAttemptMock.mockImplementationOnce(async (params: unknown) => {
+      const attempt = params as {
+        runId: string;
+        sessionId: string;
+        sessionFile?: string;
+        provider: string;
+        modelId: string;
+        model: { api: string };
+      };
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: "ok" }],
+      });
+      const messages = [assistant];
+      const subscription = {
+        assistantTexts: ["ok"],
+        didSendDeterministicApprovalPrompt: () => false,
+        didSendViaMessagingTool: () => false,
+        getAcceptedSessionSpawns: () => [],
+        getAssistantTurnCount: () => 1,
+        getCompactionCount: () => 0,
+        getCurrentAttemptAssistant: () => assistant,
+        getHeartbeatToolResponse: () => undefined,
+        getItemLifecycle: () => undefined,
+        getLastAssistantTextMessageIndex: () => 0,
+        getLastAssistantUsage: () => undefined,
+        getLastCompactionTokensAfter: () => undefined,
+        getLastToolError: () => undefined,
+        getLatestMcpAppChannelView: () => undefined,
+        getMessagingToolSentMediaUrls: () => [],
+        getMessagingToolSentTargets: () => [],
+        getMessagingToolSentTexts: () => [],
+        getMessagingToolSourceReplyPayloads: () => [],
+        getPendingToolMediaReply: () => undefined,
+        getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: false }),
+        getSuccessfulCronAdds: () => [],
+        getUsageTotals: () => undefined,
+        getVisibleBlockReplyCount: () => 0,
+        hasToolMediaBlockReply: () => false,
+        isCompactionInFlight: () => false,
+        setTerminalLifecycleMeta: () => {},
+        toolMetas: [{ toolName: "exec", isError: false }],
+        waitForCompactionRetry: async () => {},
+      };
+      const sessionManager = {
+        appendCustomEntry: vi.fn(),
+        buildSessionContext: () => ({ messages }),
+        getEntries: () => [],
+        removeTrailingEntries: vi.fn(() => 0),
+      };
+      const { settleEmbeddedAttemptStream } =
+        await import("./embedded-agent-runner/run/attempt-stream-settle.js");
+      const settled = await settleEmbeddedAttemptStream({
+        attempt: attempt as never,
+        activeSession: {
+          agent: { state: { messages } },
+          isCompacting: false,
+          isStreaming: false,
+          messages,
+          sessionId: attempt.sessionId,
+        } as never,
+        sessionManager: sessionManager as never,
+        withOwnedTranscriptWrite: async (operation) => await operation(),
+        subscription: subscription as never,
+        state: {
+          promptError: null,
+          promptErrorSource: null,
+          yieldAborted: false,
+          sessionIdUsed: attempt.sessionId,
+        },
+        readLifecycleState: () => ({
+          aborted: false,
+          timedOut: false,
+          timedOutDuringCompaction: false,
+        }),
+        markTimedOutDuringCompaction: () => {},
+        runAbortDeadlineAtMs: Date.now() + 60_000,
+        runAbortSignal: new AbortController().signal,
+        isProbeSession: true,
+        abortable: async (promise) => await promise,
+        prePromptMessageCount: 0,
+        toolSearchTargetTranscriptProjections: [
+          {
+            parentToolCallId: "outer-exec",
+            toolCallId: "tool_search_code:outer-exec:read:1",
+            toolName: "read",
+            input: { path: "qa/scenarios/index.yaml" },
+            result: {
+              content: [{ type: "text", text: "QA scenario pack mission" }],
+              details: {},
+            },
+            isError: false,
+          },
+        ],
+        cache: {
+          observabilityEnabled: false,
+          changesForTurn: null,
+          retention: undefined,
+        },
+        shouldFlushForContextEngine: false,
+      });
+      const { completeEmbeddedAttemptResult } =
+        await import("./embedded-agent-runner/run/attempt-result.js");
+      return completeEmbeddedAttemptResult({
+        attempt: attempt as never,
+        subscription: subscription as never,
+        state: {
+          terminal: { kind: "ok" },
+          sessionIdUsed: settled.sessionIdUsed,
+          messagesSnapshot: settled.messagesSnapshot,
+          lastAssistant: settled.lastAssistant,
+          currentAttemptAssistant: settled.currentAttemptAssistant,
+          currentAttemptCompletedAssistant: settled.currentAttemptCompletedAssistant,
+          successfulNestedToolNames: settled.successfulNestedToolNames,
+          yieldDetected: false,
+          didDeliverSourceReplyViaMessageTool: false,
+          diagnosticTrace: { traceId: "trace-1", spanId: "span-1" },
+        } as never,
+        clientToolCallSlots: [],
+        hookRunner: null,
+        hookAgentId: "main",
+        bootstrapPromptWarning: {},
+        cache: {
+          observabilityEnabled: false,
+          trace: null,
+          break: null,
+          changesForTurn: null,
+          streamStrategy: "default",
+        },
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      sessionId: "session:test",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "read the QA scenario index",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("nested-tool-receipt"),
+      enqueue: immediateEnqueue,
+    });
+
+    const terminalReceipt = (
+      result.meta.agentMeta as { terminalReceipt?: { successfulToolNames?: string[] } } | undefined
+    )?.terminalReceipt;
+    expect(terminalReceipt?.successfulToolNames).toEqual(["exec", "read"]);
+  });
+
   it("preserves harness-owned media provenance through terminal preparation", async () => {
     const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);

@@ -33,6 +33,10 @@ type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSessi
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 
+export type EmbeddedRunAttemptWithReceiptEvidence = EmbeddedRunAttemptResult & {
+  successfulNestedToolNames?: string[];
+};
+
 export type EmbeddedAttemptClientToolCallSlot = {
   toolCallId: string;
   name: string;
@@ -41,7 +45,7 @@ export type EmbeddedAttemptClientToolCallSlot = {
 };
 
 type EmbeddedAttemptResultState = Pick<
-  EmbeddedRunAttemptResult,
+  EmbeddedRunAttemptWithReceiptEvidence,
   | "terminal"
   | "preflightRecovery"
   | "sessionIdUsed"
@@ -53,6 +57,7 @@ type EmbeddedAttemptResultState = Pick<
   | "lastAssistant"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
+  | "successfulNestedToolNames"
   | "attemptUsage"
   | "promptCache"
   | "contextBudgetStatus"
@@ -142,7 +147,7 @@ function hasVisiblePendingToolMediaReply(
 /** Runs output hooks, classifies terminal effects, and returns the finalized attempt result. */
 export function completeEmbeddedAttemptResult(
   input: CompleteEmbeddedAttemptResultInput,
-): EmbeddedRunAttemptResult {
+): EmbeddedRunAttemptWithReceiptEvidence {
   const { attempt, state, subscription } = input;
   const terminal = projectAgentRunAttemptTerminal(state.terminal);
   const {
@@ -372,7 +377,7 @@ export function completeEmbeddedAttemptResult(
       terminal: state.terminal,
     },
   });
-  const result: EmbeddedRunAttemptResult = {
+  const result: EmbeddedRunAttemptWithReceiptEvidence = {
     ...state,
     replayMetadata,
     currentAttemptReplayMetadata,
@@ -385,6 +390,7 @@ export function completeEmbeddedAttemptResult(
     latestMcpAppChannelView: getLatestMcpAppChannelView(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
     toolMetas: toolMetasNormalized,
+    successfulNestedToolNames: state.successfulNestedToolNames,
     acceptedSessionSpawns,
     lastToolError,
     didSendViaMessagingTool: didSendViaMessagingTool(),
