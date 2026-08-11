@@ -1,33 +1,31 @@
 // Hidden operator contract for isolated agent-database upgrade rehearsals.
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
-import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, resolveAgentConfig, resolveAgentDir } from "../agents/agent-scope.js";
 import { createConfigIO } from "../config/io.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   isPerAgentSessionStoreConfig,
   listConfiguredSessionStoreAgentIds,
 } from "../config/sessions/targets.js";
-import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { writeRuntimeJson } from "../runtime.js";
 import { findOpenClawAgentDatabaseMediaMigrationRequiredError } from "../state/openclaw-agent-db-migration-required.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   listOpenClawRegisteredAgentDatabases,
   replaceOpenClawAgentDatabaseRegistryForRehearsal,
 } from "../state/openclaw-agent-db-registry.js";
-import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
+import {
+  hasOpenClawAgentApplicationSchema,
+  readExistingAgentSchemaMeta,
+} from "../state/openclaw-agent-db-schema-helpers.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   migrateOpenClawAgentDatabaseForMaintenance,
@@ -42,11 +40,8 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { VERSION } from "../version.js";
 
 const REHEARSAL_SCHEMA_VERSION = 1;
-const REHEARSAL_REQUEST_MAX_BYTES = 256 * 1024;
 const REHEARSAL_MAX_AGENT_DATABASES = 256;
 const REHEARSAL_MAX_INVENTORY_REFERENCES = 2048;
-
-type RehearsalMode = "inventory" | "migrate" | "read-only";
 
 type PluginPersistenceDeclaration = {
   pluginId: string;
@@ -106,7 +101,7 @@ type InventoryReference = {
     | "default-session-store";
 };
 
-class AgentDatabaseRehearsalError extends Error {
+export class AgentDatabaseRehearsalError extends Error {
   constructor(
     readonly code: string,
     message: string,
@@ -182,7 +177,7 @@ function parseRequest(value: unknown): ParsedRequest {
       `agents exceeds the ${REHEARSAL_MAX_AGENT_DATABASES}-entry limit.`,
     );
   }
-  const agents = value.agents.map((entry, index) => {
+  const agents: AgentDatabaseRequest[] = value.agents.map((entry, index) => {
     if (!isRecord(entry)) {
       fail("invalid-request", `agents[${index}] must be an object.`);
     }
@@ -331,9 +326,7 @@ function inspectDatabaseSnapshot(pathname: string): DatabaseSnapshot {
 function hasApplicationSchema(pathname: string): boolean {
   const database = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {
-    return Boolean(
-      database.prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get(),
-    );
+    return hasOpenClawAgentApplicationSchema(database);
   } finally {
     database.close();
   }
@@ -470,7 +463,10 @@ async function runInventory(request: InventoryRequest) {
   const configuredSessionStore = Boolean(storeConfig?.trim());
   for (const agentId of listConfiguredSessionStoreAgentIds(config)) {
     const normalizedAgentId = normalizeAgentId(agentId);
-    const storePath = resolveStorePath(storeConfig, { agentId: normalizedAgentId, env });
+    const storePath = resolveSessionStorePathCore(storeConfig, {
+      agentId: normalizedAgentId,
+      env,
+    });
     const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
     addReference({
       agentId: normalizedAgentId,
@@ -682,68 +678,4 @@ export async function runAgentDatabaseRehearsal(requestValue: unknown) {
     return await runReadOnly(request, root, agents, env);
   }
   return runMigrate(request, root, agents, env);
-}
-
-async function readRequestSource(source: string, stdin: AsyncIterable<unknown>): Promise<unknown> {
-  let raw: Buffer;
-  if (source === "-") {
-    raw = await readByteStreamWithLimit(stdin, {
-      maxBytes: REHEARSAL_REQUEST_MAX_BYTES,
-      onOverflow: ({ maxBytes }) =>
-        new AgentDatabaseRehearsalError("request-too-large", `request exceeds ${maxBytes} bytes.`),
-    });
-  } else {
-    const file = await fsp.open(path.resolve(source), "r");
-    try {
-      const stat = await file.stat();
-      if (!stat.isFile()) {
-        fail("request-unavailable", "request source must be a regular file.");
-      }
-      if (stat.size > REHEARSAL_REQUEST_MAX_BYTES) {
-        fail("request-too-large", `request exceeds ${REHEARSAL_REQUEST_MAX_BYTES} bytes.`);
-      }
-      raw = await readFileDescriptorBounded(file.fd, REHEARSAL_REQUEST_MAX_BYTES);
-    } finally {
-      await file.close();
-    }
-  }
-  try {
-    return JSON.parse(raw.toString("utf8")) as unknown;
-  } catch {
-    return fail("invalid-json", "request source is not valid JSON.");
-  }
-}
-
-export async function agentsDatabaseRehearsalCommand(
-  options: { request: string },
-  runtime: RuntimeEnv,
-  deps: { stdin?: AsyncIterable<unknown> } = {},
-): Promise<void> {
-  let mode: RehearsalMode | undefined;
-  try {
-    const value = await readRequestSource(options.request, deps.stdin ?? process.stdin);
-    mode =
-      isRecord(value) && typeof value.mode === "string" ? (value.mode as RehearsalMode) : undefined;
-    writeRuntimeJson(runtime, await runAgentDatabaseRehearsal(value), 0);
-  } catch (error) {
-    const typed =
-      error instanceof AgentDatabaseRehearsalError
-        ? error
-        : new AgentDatabaseRehearsalError("rehearsal-failed", formatErrorMessage(error));
-    writeRuntimeJson(
-      runtime,
-      {
-        schemaVersion: 1,
-        ok: false,
-        ...(mode ? { mode } : {}),
-        code: typed.code,
-        message: typed.message,
-        ...(typed.unsupportedPluginPersistence
-          ? { unsupportedPluginPersistence: typed.unsupportedPluginPersistence }
-          : {}),
-      },
-      0,
-    );
-    runtime.exit(1, { resetStream: process.stderr });
-  }
 }

@@ -10,7 +10,7 @@ import { collectOption } from "./helpers.js";
 type AgentsAddModule = typeof import("../../commands/agents.commands.add.js");
 type AgentsBindModule = typeof import("../../commands/agents.commands.bind.js");
 type AgentsDeleteModule = typeof import("../../commands/agents.commands.delete.js");
-type AgentsDatabaseRehearsalModule = typeof import("../../commands/agents.db-rehearsal.js");
+type AgentsDatabaseRehearsalModule = typeof import("../../commands/agents.db-rehearsal-cli.js");
 type AgentsIdentityModule = typeof import("../../commands/agents.commands.identity.js");
 type AgentsListModule = typeof import("../../commands/agents.commands.list.js");
 type CliUtilsModule = typeof import("../cli-utils.js");
@@ -43,7 +43,7 @@ async function loadAgentsDeleteCommand(): Promise<AgentsDeleteModule["agentsDele
 async function loadAgentsDatabaseRehearsalCommand(): Promise<
   AgentsDatabaseRehearsalModule["agentsDatabaseRehearsalCommand"]
 > {
-  return (await import("../../commands/agents.db-rehearsal.js")).agentsDatabaseRehearsalCommand;
+  return (await import("../../commands/agents.db-rehearsal-cli.js")).agentsDatabaseRehearsalCommand;
 }
 
 async function loadAgentsSetIdentityCommand(): Promise<

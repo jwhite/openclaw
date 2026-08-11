@@ -58,7 +58,7 @@ vi.mock("../../commands/agents.commands.delete.js", () => ({
   agentsDeleteCommand: mocks.agentsDeleteCommandMock,
 }));
 
-vi.mock("../../commands/agents.db-rehearsal.js", () => ({
+vi.mock("../../commands/agents.db-rehearsal-cli.js", () => ({
   agentsDatabaseRehearsalCommand: mocks.agentsDatabaseRehearsalCommandMock,
 }));
 
