@@ -6,6 +6,7 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
+import { setCommandJsonMode } from "./json-mode.js";
 
 type AgentsAddModule = typeof import("../../commands/agents.commands.add.js");
 type AgentsBindModule = typeof import("../../commands/agents.commands.bind.js");
@@ -273,8 +274,8 @@ ${formatHelpExamples([
       });
     });
 
-  agents
-    .command("db-rehearsal", { hidden: true })
+  const dbRehearsal = agents.command("db-rehearsal", { hidden: true });
+  setCommandJsonMode(dbRehearsal, "output", () => true)
     .requiredOption("--request <file|->", "Read the bounded rehearsal JSON request")
     .action(async (opts): Promise<void> => {
       const { defaultRuntime } = await loadAgentsActionRuntime();
