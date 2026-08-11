@@ -957,17 +957,31 @@ export function buildGuardedModelFetch(
         headers,
       });
     }
+    // S2.4 finding (ha-voice latency tracing, 2026-08-07): the "[model-fetch] response" log
+    // above only measures time-to-first-byte (headers) for a streaming response — it does not
+    // capture how long the caller actually took to consume the rest of the SSE body, leaving a
+    // real gap in every existing latency trace. Logged here, not at the "response" log site,
+    // because this is the only point that fires once the stream is actually fully drained (via
+    // wrapGuardedBodyStream's cleanup) rather than when headers first arrive.
+    const releaseWithStreamCompleteLog = async () => {
+      emitModelTransportDebug(
+        log,
+        `[model-fetch] stream-complete provider=${model.provider} api=${model.api} model=${model.id} ` +
+          `totalElapsedMs=${Date.now() - fetchStartedAt}`,
+      );
+      await result.release();
+    };
     if (synthesizeJsonAsSse && options?.sanitizeSse !== false) {
       response = await normalizeOpenAISdkStreamContentType({
         response,
         model,
-        release: result.release,
+        release: releaseWithStreamCompleteLog,
         localServiceLease,
       });
     }
     response = buildManagedResponse(
       response,
-      result.release,
+      releaseWithStreamCompleteLog,
       result.refreshTimeout,
       localServiceLease,
     );
