@@ -8,7 +8,6 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   emitDiagnosticsTimelineEvent,
@@ -18,6 +17,8 @@ import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gatewa
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
+import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
@@ -524,21 +525,24 @@ export async function handleChatSend(
                       // Register for any other active runs *in the same session* so
                       // late-joining clients (e.g. page refresh mid-response) receive
                       // in-progress tool events without leaking cross-session data.
-                      const globalFallbackAgentId =
+                      const compatibilityGlobalAgentId =
                         sessionKey === "global"
-                          ? (selectedAgent.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg))
+                          ? tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey)
                           : undefined;
                       const selectedGlobalAgentId =
-                        sessionKey === "global" ? globalFallbackAgentId : undefined;
+                        sessionKey === "global"
+                          ? (selectedAgent.agentId ?? compatibilityGlobalAgentId)
+                          : undefined;
                       for (const [activeRunId, active] of context.chatAbortControllers) {
-                        const activeGlobalAgentId =
-                          active.sessionKey === "global"
-                            ? (active.agentId ?? globalFallbackAgentId)
-                            : undefined;
                         const sameSelectedGlobalAgent =
                           sessionKey === "global" &&
                           selectedGlobalAgentId !== undefined &&
-                          activeGlobalAgentId === selectedGlobalAgentId;
+                          chatRunBelongsToSelectedAgent({
+                            agentId: active.agentId,
+                            sessionKey: active.sessionKey,
+                            defaultAgentId: compatibilityGlobalAgentId,
+                            selectedAgentId: selectedGlobalAgentId,
+                          });
                         const sameSession =
                           active.sessionKey === sessionKey &&
                           (sessionKey !== "global" || sameSelectedGlobalAgent);
