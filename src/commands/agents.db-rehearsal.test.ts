@@ -161,6 +161,54 @@ describe("agents database rehearsal", () => {
     expect(result.complete).toBe(true);
   });
 
+  it("accepts exactly 2048 logical inventory references", async () => {
+    const stateRoot = await makeRoot();
+    const configPath = path.join(stateRoot, "openclaw.json");
+    const entries = Object.fromEntries(
+      Array.from({ length: 1024 }, (_, index) => [
+        `agent-${index}`,
+        index === 0 ? { default: true } : {},
+      ]),
+    );
+    await fsp.writeFile(
+      configPath,
+      JSON.stringify({ agents: { entries }, plugins: { enabled: false } }),
+    );
+
+    const result = (await runAgentDatabaseRehearsal({
+      schemaVersion: 1,
+      mode: "inventory",
+      stateRoot,
+      configPath,
+    })) as Extract<RehearsalSuccess, { mode: "inventory" }>;
+
+    expect(result.references).toHaveLength(2048);
+  });
+
+  it("rejects the 2049th logical inventory reference", async () => {
+    const stateRoot = await makeRoot();
+    const configPath = path.join(stateRoot, "openclaw.json");
+    const entries = Object.fromEntries(
+      Array.from({ length: 1025 }, (_, index) => [
+        `agent-${index}`,
+        index === 0 ? { default: true } : {},
+      ]),
+    );
+    await fsp.writeFile(
+      configPath,
+      JSON.stringify({ agents: { entries }, plugins: { enabled: false } }),
+    );
+
+    await expect(
+      runAgentDatabaseRehearsal({
+        schemaVersion: 1,
+        mode: "inventory",
+        stateRoot,
+        configPath,
+      }),
+    ).rejects.toMatchObject({ code: "inventory-limit-exceeded" });
+  });
+
   it("rejects unsupported plugin persistence before validating or opening any database", async () => {
     const root = await makeRoot();
     await expect(

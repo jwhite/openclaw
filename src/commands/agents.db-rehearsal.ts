@@ -44,7 +44,7 @@ import { VERSION } from "../version.js";
 const REHEARSAL_SCHEMA_VERSION = 1;
 const REHEARSAL_REQUEST_MAX_BYTES = 256 * 1024;
 const REHEARSAL_MAX_AGENT_DATABASES = 256;
-const REHEARSAL_MAX_INVENTORY_REFERENCES = 256;
+const REHEARSAL_MAX_INVENTORY_REFERENCES = 2048;
 
 type RehearsalMode = "inventory" | "migrate" | "read-only";
 
