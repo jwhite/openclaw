@@ -881,15 +881,32 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/ha-voice:
+  extensions/ha-control:
     dependencies:
+      typebox:
+        specifier: 1.3.3
+        version: 1.3.3
       zod:
         specifier: 4.4.3
         version: 4.4.3
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
+
+  extensions/ha-events:
+    dependencies:
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
+  extensions/ha-voice:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.4.3)
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   extensions/huggingface:
     devDependencies:
