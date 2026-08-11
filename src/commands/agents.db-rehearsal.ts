@@ -6,7 +6,6 @@ import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-w
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, resolveAgentConfig, resolveAgentDir } from "../agents/agent-scope.js";
 import { createConfigIO } from "../config/io.js";
-import { resolveStateDir } from "../config/paths.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -75,8 +74,7 @@ type RehearsalRequestBase = {
   pluginPersistence: PluginPersistenceDeclaration[];
 };
 
-type RehearsalRequest = RehearsalRequestBase &
-  ({ mode: "migrate" } | { mode: "read-only" });
+type RehearsalRequest = RehearsalRequestBase & ({ mode: "migrate" } | { mode: "read-only" });
 
 type ParsedRequest = InventoryRequest | RehearsalRequest;
 
@@ -243,6 +241,24 @@ function assertPathInsideRoot(root: string, candidate: string, label: string): v
   }
 }
 
+function realpathExistingAncestor(pathname: string, label: string): string {
+  let current = path.resolve(pathname);
+  while (true) {
+    try {
+      return fs.realpathSync.native(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        fail("path-unavailable", `${label} is unavailable: ${formatErrorMessage(error)}`);
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        fail("path-unavailable", `${label} has no existing ancestor.`);
+      }
+      current = parent;
+    }
+  }
+}
+
 function assertPrivateDatabaseFamily(params: {
   root: string;
   pathname: string;
@@ -251,7 +267,7 @@ function assertPrivateDatabaseFamily(params: {
 }): string {
   const resolved = path.resolve(params.pathname);
   assertPathInsideRoot(params.root, resolved, params.label);
-  const parentReal = fs.realpathSync.native(path.dirname(resolved));
+  const parentReal = realpathExistingAncestor(path.dirname(resolved), `${params.label} parent`);
   assertPathInsideRoot(params.root, parentReal, `${params.label} parent`);
   let mainReal: string | undefined;
   for (const candidate of resolveSqliteDatabaseFilePaths(resolved)) {
@@ -439,7 +455,7 @@ async function runInventory(request: InventoryRequest) {
     ok: true as const,
     mode: "inventory" as const,
     runtimeVersion: VERSION,
-    stateRoot: resolveStateDir(env),
+    stateRoot: root.resolved,
     configPath,
     references: [...references.values()].toSorted(
       (left, right) =>
@@ -504,9 +520,9 @@ async function runReadOnly(
       ok: true as const,
       mode: request.mode,
       runtimeVersion: VERSION,
-      privateStateRoot: root.real,
+      privateStateRoot: root.resolved,
       sharedState: {
-        path: sharedPath,
+        path: path.join(root.resolved, "state", "openclaw.sqlite"),
         schemaVersionBefore: stateBefore.userVersion,
         schemaVersionAfter: stateAfter.userVersion,
         role: stateAfter.role,
@@ -584,9 +600,9 @@ function runMigrate(
       ok: true as const,
       mode: request.mode,
       runtimeVersion: VERSION,
-      privateStateRoot: root.real,
+      privateStateRoot: root.resolved,
       sharedState: {
-        path: sharedPath,
+        path: path.join(root.resolved, "state", "openclaw.sqlite"),
         schemaVersionBefore: stateBefore.userVersion,
         schemaVersionAfter: stateAfter.userVersion,
         role: stateAfter.role,

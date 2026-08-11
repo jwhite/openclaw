@@ -177,6 +177,30 @@ describe("agents database rehearsal", () => {
     expect(fs.existsSync(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root }))).toBe(false);
   });
 
+  it("creates the private shared database when its canonical state directory is missing", async () => {
+    const root = await makeRoot();
+    const databasePath = path.join(root, "copy", "openclaw-agent.sqlite");
+    await fsp.mkdir(path.dirname(databasePath), { recursive: true });
+    new DatabaseSync(databasePath).close();
+
+    const result = (await runAgentDatabaseRehearsal({
+      schemaVersion: 1,
+      mode: "migrate",
+      privateStateRoot: root,
+      agents: [{ agentId: "main", copiedPath: databasePath }],
+      pluginPersistence: [],
+    })) as Extract<RehearsalSuccess, { mode: "migrate" }>;
+
+    expect(result.sharedState).toMatchObject({
+      path: path.join(root, "state", "openclaw.sqlite"),
+      schemaVersionBefore: 0,
+      schemaVersionAfter: OPENCLAW_STATE_SCHEMA_VERSION,
+      role: "global",
+    });
+    expect(result.privateStateRoot).toBe(root);
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root }))).toBe(true);
+  });
+
   it("migrates every explicit composite row and replaces stale private registry rows", async () => {
     const root = await makeRoot();
     const first = createAgentDatabase({
@@ -261,6 +285,7 @@ describe("agents database rehearsal", () => {
     })) as Extract<RehearsalSuccess, { mode: "read-only" }>;
 
     expect(result.sharedState.readOnly).toBe(true);
+    expect(result.sharedState.schemaVersionBefore).toBe(result.sharedState.schemaVersionAfter);
     expect(result.agents[0]).toMatchObject({
       migrated: false,
       before: { userVersion: beforeVersion },
