@@ -9,7 +9,6 @@ function registerHaVoiceRoute(api) {
     const handler = createHaVoiceWebhookRequestHandler({
         cfg: api.config,
         targetsByPath,
-        logger: { warn: (message) => api.logger.warn(message) },
     });
     const target = {
         path: resolved.path,
@@ -17,7 +16,9 @@ function registerHaVoiceRoute(api) {
         secretConfigPath: "plugins.entries.ha-voice.config.secret",
         agentId,
         sessionScope: resolved.sessionScope,
-        ...(resolved.responseSystemPrompt ? { responseSystemPrompt: resolved.responseSystemPrompt } : {}),
+        ...(resolved.responseSystemPrompt
+            ? { responseSystemPrompt: resolved.responseSystemPrompt }
+            : {}),
         ...(resolved.responseTimeoutMs ? { responseTimeoutMs: resolved.responseTimeoutMs } : {}),
         agentRuntime: api.runtime.agent,
     };

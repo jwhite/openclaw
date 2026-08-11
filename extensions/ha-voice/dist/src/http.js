@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { createFixedWindowRateLimiter, createWebhookInFlightLimiter, normalizeLowercaseStringOrEmpty, readJsonWebhookBodyOrReject, resolveConfiguredSecretInputString, resolveRequestClientIp, resolveWebhookTargetWithAuthOrReject, safeEqualSecret, withResolvedWebhookRequestPipeline, WEBHOOK_IN_FLIGHT_DEFAULTS, WEBHOOK_RATE_LIMIT_DEFAULTS, } from "../api.js";
 import { resolveHaVoiceSessionKey } from "./config.js";
-import { writeVoiceDiaryEntry } from "./mempalace-diary.js";
 import { generateHaVoiceResponse } from "./response-generator.js";
 const converseRequestSchema = z
     .object({
@@ -118,23 +117,19 @@ export function createHaVoiceWebhookRequestHandler(params) {
                     userMessage: parsed.data.text,
                 });
                 if (!result.text) {
-                    writeJson(res, 502, { ok: false, error: result.error ?? "No response generated" });
+                    writeJson(res, 502, {
+                        ok: false,
+                        error: result.error ?? "No response generated",
+                        traceId: result.traceId,
+                    });
                     return true;
                 }
-                const mempalaceUrl = params.cfg.mcp?.servers?.mempalace?.url;
-                if (mempalaceUrl && params.logger) {
-                    // Fire-and-forget: the voice response must never wait on (or fail because of) the
-                    // diary write. Failures are caught and logged inside writeVoiceDiaryEntry itself.
-                    void writeVoiceDiaryEntry({
-                        mempalaceUrl,
-                        said: parsed.data.text,
-                        response: result.text,
-                        ...(parsed.data.deviceId ? { deviceId: parsed.data.deviceId } : {}),
-                        timestampMs: Date.now(),
-                        logger: params.logger,
-                    });
-                }
-                writeJson(res, 200, { ok: true, response: result.text });
+                writeJson(res, 200, {
+                    ok: true,
+                    response: result.text,
+                    continueConversation: result.continueConversation === true,
+                    traceId: result.traceId,
+                });
                 return true;
             },
         });

@@ -19,7 +19,6 @@ import {
 import type { HaVoiceSecretInput, ResolvedHaVoiceConfig } from "./config.js";
 import { resolveHaVoiceSessionKey } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
-import { writeVoiceDiaryEntry } from "./mempalace-diary.js";
 import { generateHaVoiceResponse } from "./response-generator.js";
 
 const converseRequestSchema = z
@@ -71,7 +70,6 @@ export function createHaVoiceWebhookRequestHandler(params: {
   cfg: OpenClawConfig;
   targetsByPath: Map<string, HaVoiceWebhookTarget[]>;
   inFlightLimiter?: WebhookInFlightLimiter;
-  logger?: { warn: (message: string) => void };
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
@@ -170,25 +168,20 @@ export function createHaVoiceWebhookRequestHandler(params: {
         });
 
         if (!result.text) {
-          writeJson(res, 502, { ok: false, error: result.error ?? "No response generated" });
+          writeJson(res, 502, {
+            ok: false,
+            error: result.error ?? "No response generated",
+            traceId: result.traceId,
+          });
           return true;
         }
 
-        const mempalaceUrl = params.cfg.mcp?.servers?.mempalace?.url;
-        if (mempalaceUrl && params.logger) {
-          // Fire-and-forget: the voice response must never wait on (or fail because of) the
-          // diary write. Failures are caught and logged inside writeVoiceDiaryEntry itself.
-          void writeVoiceDiaryEntry({
-            mempalaceUrl,
-            said: parsed.data.text,
-            response: result.text,
-            ...(parsed.data.deviceId ? { deviceId: parsed.data.deviceId } : {}),
-            timestampMs: Date.now(),
-            logger: params.logger,
-          });
-        }
-
-        writeJson(res, 200, { ok: true, response: result.text });
+        writeJson(res, 200, {
+          ok: true,
+          response: result.text,
+          continueConversation: result.continueConversation === true,
+          traceId: result.traceId,
+        });
         return true;
       },
     });

@@ -7,11 +7,31 @@
 import { normalizeLowercaseStringOrEmpty } from "../runtime-api.js";
 export const SPOKEN_OUTPUT_CONTRACT = [
     "Output format requirements:",
-    '- Return only valid JSON in this exact shape: {"spoken":"..."}',
+    '- Return only valid JSON in this exact shape: {"spoken":"...","continueConversation":false}',
     "- Do not include markdown, code fences, planning text, or extra keys.",
     '- Put exactly what should be spoken aloud into "spoken".',
     '- If there is nothing to say, return {"spoken":""}.',
+    '- "continueConversation" is required. Set it to true when your reply expects the user to',
+    "  respond before the exchange is really done - a clarifying question, confirming a multi-step",
+    '  action you just took, or an open invitation like "anything else?". Set it to false for a',
+    "  complete, standalone answer that doesn't need a reply.",
 ].join("\n");
+export const SPOKEN_OUTPUT_RESPONSE_FORMAT = {
+    type: "json_schema",
+    json_schema: {
+        name: "ha_voice_spoken_response",
+        strict: true,
+        schema: {
+            type: "object",
+            properties: {
+                spoken: { type: "string" },
+                continueConversation: { type: "boolean" },
+            },
+            required: ["spoken", "continueConversation"],
+            additionalProperties: false,
+        },
+    },
+};
 function normalizeSpokenText(value) {
     const normalized = value.replace(/\s+/g, " ").trim();
     return normalized.length > 0 ? normalized : null;
@@ -38,7 +58,10 @@ function tryParseSpokenJson(text) {
             if (typeof parsed?.spoken !== "string") {
                 continue;
             }
-            return normalizeSpokenText(parsed.spoken) ?? "";
+            return {
+                spoken: normalizeSpokenText(parsed.spoken) ?? "",
+                continueConversation: parsed.continueConversation === true,
+            };
         }
         catch {
             // Continue trying other candidates.
@@ -50,7 +73,11 @@ function tryParseSpokenJson(text) {
     }
     try {
         const decoded = JSON.parse(`"${inlineSpokenMatch[1] ?? ""}"`);
-        return normalizeSpokenText(decoded) ?? "";
+        const inlineContinueMatch = trimmed.match(/"continueConversation"\s*:\s*(true|false)/i);
+        return {
+            spoken: normalizeSpokenText(decoded) ?? "",
+            continueConversation: (inlineContinueMatch?.[1] ?? "").toLowerCase() === "true",
+        };
     }
     catch {
         return null;
@@ -73,6 +100,9 @@ function isLikelyMetaReasoningParagraph(paragraph) {
     }
     return false;
 }
+function guessContinueConversationFromPlainText(text) {
+    return text.trim().endsWith("?");
+}
 function sanitizePlainSpokenText(text) {
     const withoutCodeFences = text.replace(/```[\s\S]*?```/g, " ").trim();
     if (!withoutCodeFences) {
@@ -87,8 +117,16 @@ function sanitizePlainSpokenText(text) {
     }
     return normalizeSpokenText(paragraphs.join(" "));
 }
+const PRONUNCIATION_FIXUPS = [
+    [/\bswales\b/gi, "swayls"],
+    [/\bswale\b/gi, "swayl"],
+];
+function applyPronunciationFixups(text) {
+    return PRONUNCIATION_FIXUPS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), text);
+}
 export function extractSpokenTextFromPayloads(payloads) {
     const spokenSegments = [];
+    let continueConversation = false;
     for (const payload of payloads) {
         if (payload.isError || payload.isReasoning) {
             continue;
@@ -99,15 +137,21 @@ export function extractSpokenTextFromPayloads(payloads) {
         }
         const structured = tryParseSpokenJson(rawText);
         if (structured !== null) {
-            if (structured.length > 0) {
-                spokenSegments.push(structured);
+            if (structured.spoken.length > 0) {
+                spokenSegments.push(structured.spoken);
+                continueConversation = structured.continueConversation;
             }
             continue;
         }
         const plain = sanitizePlainSpokenText(rawText);
         if (plain) {
             spokenSegments.push(plain);
+            continueConversation = guessContinueConversationFromPlainText(plain);
         }
     }
-    return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
+    const joined = spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
+    return {
+        text: joined ? applyPronunciationFixups(joined) : null,
+        continueConversation,
+    };
 }

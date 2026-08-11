@@ -11,7 +11,6 @@ function registerHaVoiceRoute(api: OpenClawPluginApi): void {
   const handler = createHaVoiceWebhookRequestHandler({
     cfg: api.config,
     targetsByPath,
-    logger: { warn: (message: string) => api.logger.warn(message) },
   });
 
   const target: HaVoiceWebhookTarget = {
