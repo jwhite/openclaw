@@ -193,6 +193,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
 
   it("binds persistent app views to the same finite scheduled cap", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled-app", requesterSenderId: "unused" });
+    runtime.sessionKey = "agent:main:main";
     delete runtime.requesterScope;
     const catalog = runtime.peekCatalog()!;
     catalog.servers["user-mail"]!.toolCount = 2;
@@ -230,6 +231,8 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
 
     const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-app",
+      sessionKey: "agent:main:main",
+      agentId: "main",
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__show", "user-mail__app-only"],
     });
@@ -254,6 +257,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
       sessionId: "scheduled-app-approval",
       requesterSenderId: "unused",
     });
+    runtime.sessionKey = "agent:main:main";
     delete runtime.requesterScope;
     const catalog = runtime.peekCatalog()!;
     catalog.servers["user-mail"]!.toolCount = 3;
@@ -301,6 +305,8 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
 
     const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-app-approval",
+      sessionKey: "agent:main:main",
+      agentId: "main",
       workspaceDir: "/workspace",
       toolsAllow: ["*"],
     });
@@ -329,6 +335,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
 
   it("allows prompt-mode app tools only under host-confirmed yolo", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled-app-yolo", requesterSenderId: "unused" });
+    runtime.sessionKey = "agent:main:main";
     delete runtime.requesterScope;
     const catalog = runtime.peekCatalog()!;
     catalog.servers["user-mail"]!.toolCount = 2;
@@ -365,6 +372,8 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
 
     const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-app-yolo",
+      sessionKey: "agent:main:main",
+      agentId: "main",
       workspaceDir: "/workspace",
       toolsAllow: ["*"],
       autoApproveCodexAppServerApprovals: true,

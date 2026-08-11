@@ -87,6 +87,7 @@ function filterScheduledCodexApproval(
 type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
   agentDir?: string;
   cfg?: OpenClawConfig;
@@ -193,6 +194,7 @@ export async function materializeStaticMcpToolsForScheduledHarnessRunCore(
   try {
     liveRuntime = await materializeBundleMcpToolsForRun({
       runtime,
+      agentId: params.agentId,
       reservedToolNames: params.reservedToolNames,
       ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
     });
@@ -272,6 +274,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     if (scopedRuntime) {
       liveRuntime = await materializeBundleMcpToolsForRun({
         runtime: scopedRuntime,
+        agentId: params.agentId,
         reservedToolNames: params.reservedToolNames,
       });
       const catalog = scopedRuntime.peekCatalog() ?? (await scopedRuntime.getCatalog());

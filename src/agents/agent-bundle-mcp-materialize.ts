@@ -459,6 +459,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
 
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
+  agentId?: string;
   reservedToolNames?: Iterable<string>;
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
@@ -495,6 +496,7 @@ export async function materializeBundleMcpToolsForRun(params: {
           : undefined;
         const view = await fetchMcpAppView({
           runtime: params.runtime,
+          agentId: params.agentId,
           serverName: tool.serverName,
           toolName: tool.toolName,
           uiResourceUri: tool.uiResourceUri,
