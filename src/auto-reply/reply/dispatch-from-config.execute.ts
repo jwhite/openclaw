@@ -220,9 +220,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       return;
                     }
                     const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
-                    const isFastModeAutoProgressDelivery =
-                      isFastModeAutoProgress &&
-                      state.shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                     const isForcedToolProgress =
                       state.shouldDeliverForcedToolProgressDespiteSourceSuppression();
                     const forceToolResultProgress =
@@ -232,17 +229,20 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (params.replyOptions?.suppressToolProgressMessages && !durableToolResult) {
                       return;
                     }
-                    const shouldForwardToolResultProgress = isFastModeAutoProgress
-                      ? shouldForwardProgressCallback({
+                    const shouldForwardToolResultProgress = forceToolResultProgress
+                      ? !requiresDurableToolResult &&
+                        !state.shouldEmitVerboseProgress() &&
+                        shouldForwardProgressCallback({
                           forwardWhenSourceDeliverySuppressed: true,
                         })
-                      : forceToolResultProgress
-                        ? !requiresDurableToolResult &&
-                          !state.shouldEmitVerboseProgress() &&
-                          shouldForwardProgressCallback({
-                            forwardWhenSourceDeliverySuppressed: true,
-                          })
-                        : state.shouldSendToolSummaries() && shouldForwardProgressCallback();
+                      : (state.shouldSendToolSummaries() ||
+                          (isFastModeAutoProgress &&
+                            params.replyOptions?.allowToolLifecycleWhenProgressHidden === true)) &&
+                        shouldForwardProgressCallback(
+                          isFastModeAutoProgress
+                            ? { forwardWhenSourceDeliverySuppressed: true }
+                            : undefined,
+                        );
                     const toolResultProgressCallback = shouldForwardToolResultProgress
                       ? onToolResultFromReplyOptions
                       : undefined;
@@ -263,7 +263,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       state.shouldSuppressProgressDelivery() &&
-                      !isFastModeAutoProgressDelivery &&
                       !isForcedToolProgress &&
                       !hasAskUserPayload(payload)
                     ) {
@@ -299,7 +298,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       state.shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
-                      !isFastModeAutoProgressPayload(deliveryPayload) &&
                       !isForcedToolProgress
                     ) {
                       return;
@@ -307,11 +305,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (state.shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
                       return;
                     }
-                    if (
-                      shouldSuppressDefaultToolProgressMessages() &&
-                      !isFastModeAutoProgressPayload(deliveryPayload) &&
-                      !isForcedToolProgress
-                    ) {
+                    if (shouldSuppressDefaultToolProgressMessages() && !isForcedToolProgress) {
                       if (!requiresDurableToolResultDelivery(deliveryPayload)) {
                         return;
                       }
