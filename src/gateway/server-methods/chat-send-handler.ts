@@ -524,18 +524,16 @@ export async function handleChatSend(
                       // Register for any other active runs *in the same session* so
                       // late-joining clients (e.g. page refresh mid-response) receive
                       // in-progress tool events without leaking cross-session data.
-                      const compatibilityAgentId =
+                      const globalFallbackAgentId =
                         sessionKey === "global"
-                          ? tryResolveLegacyCompatibilityAgentId(cfg)
+                          ? (selectedAgent.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg))
                           : undefined;
                       const selectedGlobalAgentId =
-                        sessionKey === "global"
-                          ? (selectedAgent.agentId ?? compatibilityAgentId)
-                          : undefined;
+                        sessionKey === "global" ? globalFallbackAgentId : undefined;
                       for (const [activeRunId, active] of context.chatAbortControllers) {
                         const activeGlobalAgentId =
                           active.sessionKey === "global"
-                            ? (active.agentId ?? compatibilityAgentId)
+                            ? (active.agentId ?? globalFallbackAgentId)
                             : undefined;
                         const sameSelectedGlobalAgent =
                           sessionKey === "global" &&
