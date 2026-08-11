@@ -1888,6 +1888,52 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).not.toHaveBeenCalled();
   });
 
+  it("keeps visible delivery successful while marking a failed agent run as an error", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+    const statusReactionController = {
+      setQueued: vi.fn(),
+      setThinking: vi.fn(),
+      setTool: vi.fn(),
+      setCompacting: vi.fn(),
+      cancelPending: vi.fn(),
+      setDone: vi.fn(async () => undefined),
+      setError: vi.fn(async () => undefined),
+      clear: vi.fn(async () => undefined),
+      restoreInitial: vi.fn(async () => undefined),
+    };
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: CapturedDispatchParams) => {
+        capturedDispatchParams = params;
+        await params.dispatcherOptions?.deliver?.({ text: "visible failure" }, { kind: "final" });
+        return {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 1 },
+          agentRunTerminalOutcome: "failed" as const,
+        };
+      },
+    );
+
+    await expect(
+      dispatchBufferedReply({
+        deliverReply,
+        rememberSentText,
+        statusReactionController,
+      }),
+    ).resolves.toBe(true);
+    await vi.waitFor(() => {
+      expect(statusReactionController.restoreInitial).toHaveBeenCalledTimes(1);
+    });
+
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expect(rememberSentText).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setError).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setDone).not.toHaveBeenCalled();
+    expect(statusReactionController.setError.mock.invocationCallOrder[0]).toBeLessThan(
+      statusReactionController.restoreInitial.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
   it("does not treat generated WhatsApp text as sent when the provider did not accept it", async () => {
     const deliverReply = vi.fn(async () => unacceptedDeliveryResult());
     const rememberSentText = vi.fn();

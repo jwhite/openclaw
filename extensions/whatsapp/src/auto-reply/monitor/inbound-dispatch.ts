@@ -899,6 +899,7 @@ export function createWhatsAppReplyPlan(params: {
     replyOptions,
     replyResolver: params.replyResolver,
     finalize: (dispatchResult: {
+      agentRunTerminalOutcome?: "completed" | "failed";
       observedReplyDelivery?: boolean;
       queuedFinal?: boolean;
       counts?: Partial<Record<ReplyLifecycleKind, number>>;
@@ -922,7 +923,10 @@ export function createWhatsAppReplyPlan(params: {
       if (statusReactionController) {
         void finalizeWhatsAppStatusReaction({
           controller: statusReactionController,
-          outcome: didDeliverVisibleReply ? "done" : "error",
+          outcome:
+            dispatchResult.agentRunTerminalOutcome === "failed" || !didDeliverVisibleReply
+              ? "error"
+              : "done",
         });
       }
       if (params.shouldClearGroupHistory) {

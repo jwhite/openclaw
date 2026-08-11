@@ -277,6 +277,27 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).not.toContain(DEFAULT_EMOJIS.done);
   });
 
+  it("marks a recovered agent failure as failed after delivering its visible error reply", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Something failed", isError: true });
+      await params?.dispatcher.waitForIdle();
+      return {
+        queuedFinal: true,
+        counts: { final: 1, tool: 0, block: 0 },
+        agentRunTerminalOutcome: "failed",
+      };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext();
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    const emojis = getReactionEmojis();
+    expect(emojis).toContain(DEFAULT_EMOJIS.error);
+    expect(emojis).not.toContain(DEFAULT_EMOJIS.done);
+  });
+
   it("can bind status reactions to an explicitly tracked reaction target", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {

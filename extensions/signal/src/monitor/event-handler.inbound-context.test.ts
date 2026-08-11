@@ -20,7 +20,7 @@ type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
   cfg?: OpenClawConfig;
   dispatcher?: {
-    sendFinalReply: (payload: { text: string }) => void;
+    sendFinalReply: (payload: { text: string; isError?: boolean }) => void;
     markComplete: () => void;
     waitForIdle: () => Promise<void>;
   };
@@ -990,6 +990,41 @@ describe("signal createSignalEventHandler inbound context", () => {
     const sentEmojis = sentReactionEmojis();
     expect(sentEmojis).toContain("❌");
     expect(sentEmojis).not.toContain("✅");
+  });
+
+  it("marks a delivered recovered agent failure as a Signal error outcome", async () => {
+    const deliverReplies = vi.fn(async () => undefined);
+    dispatchInboundMessageMock.mockImplementationOnce(
+      async (params: DispatchInboundMessageMockParams) => {
+        capture.ctx = params.ctx;
+        params.dispatcher?.sendFinalReply({ text: "agent run failed", isError: true });
+        await params.dispatcher?.waitForIdle();
+        return {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 1 },
+          agentRunTerminalOutcome: "failed" as const,
+        };
+      },
+    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+      deliverReplies,
+    });
+
+    await receiveDirectMessage(handler);
+    for (let i = 0; i < 5; i += 1) {
+      await nextTimerTick();
+    }
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "agent run failed", isError: true })],
+      }),
+    );
+    const sentEmojis = sentReactionEmojis();
+    expect(sentEmojis).toContain("❌");
+    expect(sentEmojis).not.toContain("✅");
+    expect(sentEmojis.at(-1)).toBe("👀");
   });
 
   it("targets Signal group status reactions with groupId and message author", async () => {

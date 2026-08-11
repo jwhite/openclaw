@@ -11,6 +11,12 @@ export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
   failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
+  /**
+   * Semantic outcome of a core agent run, when one actually started.
+   * Omitted for command, dedupe, busy, pre-run abort, and custom dispatch paths.
+   * This records run semantics, never reply delivery success.
+   */
+  agentRunTerminalOutcome?: "completed" | "failed";
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sendPolicyDenied?: boolean;
   observedReplyDelivery?: boolean;

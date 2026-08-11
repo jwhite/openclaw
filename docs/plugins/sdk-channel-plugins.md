@@ -565,6 +565,12 @@ surfaces:
 - `openclaw/plugin-sdk/inbound-envelope` and
   `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
+- When a dispatched turn actually starts a core agent run,
+  `DispatchFromConfigResult.agentRunTerminalOutcome` reports `"completed"` or
+  `"failed"`. The field is omitted for command, dedupe, busy, pre-run abort,
+  and custom dispatch paths. Use this semantic fact for terminal status or
+  reaction decisions; delivery counts and visibility still describe whether
+  the reply transport succeeded, including a visibly delivered error payload.
 - `createInboundEventDeliveryCorrelation(...)` from
   `openclaw/plugin-sdk/inbound-event-delivery` when successful outbound sends must
   retire an active inbound-event marker; create one tracker per channel and

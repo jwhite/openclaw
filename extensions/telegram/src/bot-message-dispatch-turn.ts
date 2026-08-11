@@ -313,6 +313,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
       return false;
     }
     turn.queuedFinal ||= turnResult.dispatchResult.queuedFinal;
+    turn.agentRunTerminalOutcome = turnResult.dispatchResult.agentRunTerminalOutcome;
     turn.noVisibleReplyFallbackEligible =
       turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
     if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {

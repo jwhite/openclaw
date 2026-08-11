@@ -74,6 +74,11 @@ type DiscordMessageProcessObserver = {
   onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
 };
 
+type DiscordDispatchResult = Extract<
+  Awaited<ReturnType<typeof dispatchChannelInboundTurn>>,
+  { dispatched: true }
+>["dispatchResult"];
+
 export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
@@ -91,18 +96,14 @@ async function processDiscordMessageInner(
     accountId,
     token,
     runtime,
-    guildHistories,
-    historyLimit,
     textLimit,
     replyToMode,
     message,
     messageChannelId,
-    canonicalMessageId,
     isGuildMessage,
     isDirectMessage,
     isGroupDm,
     messageText,
-    channelConfig,
     threadBindings,
     route,
     abortSignal,
@@ -172,7 +173,7 @@ async function processDiscordMessageInner(
     sessionKey: ctxPayload.SessionKey,
     accountId,
     sourceChannelId: messageChannelId,
-    sourceMessageId: canonicalMessageId ?? message.id,
+    sourceMessageId: ctx.canonicalMessageId ?? message.id,
     sourceReplyReference,
     log: logVerbose,
   });
@@ -586,11 +587,7 @@ async function processDiscordMessageInner(
       ),
     );
   };
-  let dispatchResult: {
-    queuedFinal: boolean;
-    counts: Record<ReplyDispatchKind, number>;
-    failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
-  } | null = null;
+  let dispatchResult: DiscordDispatchResult | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
@@ -644,13 +641,13 @@ async function processDiscordMessageInner(
         : {
             isGroup: isGuildMessage,
             historyKey: messageChannelId,
-            historyMap: guildHistories,
-            limit: historyLimit,
+            historyMap: ctx.guildHistories,
+            limit: ctx.historyLimit,
           },
       replyOptions: {
         ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
         abortSignal,
-        skillFilter: channelConfig?.skills,
+        skillFilter: ctx.channelConfig?.skills,
         sourceReplyDeliveryMode,
         typingKeepalive: shouldDisableCoreTypingKeepalive ? false : undefined,
         // The primary turn already owns one correlation; each queued followup
@@ -717,8 +714,13 @@ async function processDiscordMessageInner(
     activeThreadRoute.end();
     endDeliveryCorrelation();
     await draftPreview.cleanup();
+    dispatchError ||= dispatchResult?.agentRunTerminalOutcome === "failed";
     const finalDeliveryFailed = (dispatchResult?.failedCounts?.final ?? 0) > 0;
-    await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
+    await reactions.finish({
+      dispatchAborted,
+      dispatchError,
+      finalDeliveryFailed,
+    });
   }
   if (dispatchAborted) {
     return;

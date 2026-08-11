@@ -79,7 +79,10 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
       updatedAt: Date.now(),
     };
 
-    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
+    const replyResolver = vi.fn(async (_ctx, options) => {
+      options?.onAgentRunStart?.("successful-run");
+      return { text: "telegram reply" } satisfies ReplyPayload;
+    });
     const dispatchParams = createVisibleDispatchParams(replyResolver);
 
     const result = await dispatchReplyFromConfig(dispatchParams);
@@ -93,24 +96,30 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
     expect(result).toMatchObject({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 0 },
+      agentRunTerminalOutcome: "completed",
     });
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("records a failed reply operation when recovering a visible partial", async () => {
+  it("returns a failed run outcome when the agent recovery owner returns an error payload", async () => {
     const resolverError = new Error("provider failed after partial");
     let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
     const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
       _ctx,
       options,
     ) => {
-      if (!options) {
+      if (!options?.replyOperation) {
         throw new Error("reply options required for partial recovery");
       }
       replyOperation = options.replyOperation;
+      options.onAgentRunStart?.("failed-run");
       await options.onPartialReply?.({ text: "partial telegram reply" });
-      throw resolverError;
+      options.replyOperation.fail("run_failed", resolverError);
+      return {
+        text: "Something went wrong while processing your request. Please try again.",
+        isError: true,
+      };
     };
     const dispatchParams = {
       ...createVisibleDispatchParams(replyResolver),
@@ -129,6 +138,7 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
     expect(result).toMatchObject({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 0 },
+      agentRunTerminalOutcome: "failed",
     });
     expect(dispatchParams.replyOptions.onPartialReply).toHaveBeenCalledWith({
       text: "partial telegram reply",

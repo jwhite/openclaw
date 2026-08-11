@@ -229,6 +229,7 @@ const dispatchInboundMessage = vi.hoisted(() =>
       queuedFinal: boolean;
       counts: { final: number; tool: number; block: number };
       failedCounts?: { final?: number; tool?: number; block?: number };
+      agentRunTerminalOutcome?: "completed" | "failed";
     }>
   >(async (_params?: DispatchInboundParams) => ({
     queuedFinal: false,

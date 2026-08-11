@@ -354,6 +354,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   };
   let dispatchError: unknown;
+  let agentRunTerminalOutcome: "completed" | "failed" | undefined;
   let queuedFinal = false;
   let counts: Partial<Record<ReplyDispatchKind, number>> = {};
   try {
@@ -490,6 +491,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const result = turnResult.dispatchResult;
       queuedFinal = result.queuedFinal;
       counts = result.counts;
+      agentRunTerminalOutcome = result.agentRunTerminalOutcome;
     }
   } catch (err) {
     dispatchError = err;
@@ -501,6 +503,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // -----------------------------------------------------------------------
   // Finalize the stream if one was started
   // -----------------------------------------------------------------------
+  const agentRunFailed = agentRunTerminalOutcome === "failed";
   let streamFallbackDelivered = false;
   const finalStream = delivery.streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
@@ -508,7 +511,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const completionChunks =
         progress.useNativeProgressStreaming && !progress.nativeProgressCompletionSent
           ? progress.buildNativeProgressCompletionChunks(
-              dispatchError ? "error" : progress.nativeProgressTerminalStatus,
+              dispatchError || agentRunFailed ? "error" : progress.nativeProgressTerminalStatus,
             )
           : undefined;
       if (completionChunks?.length) {
@@ -567,7 +570,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   );
 
   if (statusReactionsEnabled) {
-    if (dispatchError) {
+    if (dispatchError || agentRunFailed) {
       await statusReactions.setError();
     } else if (anyReplyDelivered) {
       await statusReactions.setDone();

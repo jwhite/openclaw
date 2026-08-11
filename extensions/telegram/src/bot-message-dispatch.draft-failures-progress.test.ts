@@ -1,17 +1,19 @@
-import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyWithBufferedBlockDispatcherRuntime } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
   createContext,
   createDirectSessionPayload,
   createReasoningStreamContext,
+  createStatusReactionController,
   createTelegramDraftStream,
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
+  emitTelegramMessageSentHooks,
   expectDeliveredReply,
   expectDeliverRepliesParams,
+  expectRecordFields,
   expectWindowCollapsedTo,
   mockCallArg,
   requireInvocationOrder,
@@ -120,6 +122,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
   ])(
     "finalizes the default streamed draft in place after an unexpected reply failure in a $label",
     async ({ createMessageContext }) => {
+      const statusReactionController = createStatusReactionController();
       const answerDraftStream = createTestDraftStream({
         onWaitForInFlight: () => answerDraftStream.setMessageId(2001),
       });
@@ -130,22 +133,30 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       let partialAccepted: boolean | void = undefined;
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(true);
-        return await dispatchReplyWithBufferedBlockDispatcherRuntime({
-          ...params,
-          replyResolver: async (_ctx, opts) => {
-            partialAccepted = await opts?.onPartialReply?.({ text: "partial answer" });
-            throw new Error("unexpected model failure");
+        partialAccepted = await params.replyOptions?.onPartialReply?.({ text: "partial answer" });
+        await params.dispatcherOptions.deliver(
+          {
+            text: "Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
+            isError: true,
           },
-        });
+          { kind: "final" },
+        );
+        return {
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
+          agentRunTerminalOutcome: "failed",
+        };
       });
+      const messageContext = createMessageContext();
+      messageContext.statusReactionController = statusReactionController as never;
 
       await dispatchWithContext({
-        context: createMessageContext(),
+        context: messageContext,
         streamMode: "partial",
         telegramCfg: { streaming: { mode: "partial" } },
       });
 
-      expect(partialAccepted).toBeUndefined();
+      expect(partialAccepted).toBe(true);
       expect(answerDraftStream.waitForInFlight).toHaveBeenCalledOnce();
       expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "partial answer");
       expect(answerDraftStream.update).toHaveBeenCalledTimes(2);
@@ -157,6 +168,39 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       );
       expect(answerDraftStream.clear).not.toHaveBeenCalled();
       expect(deliverReplies).not.toHaveBeenCalled();
+      expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);
+      expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), { success: true });
+      await vi.waitFor(() => {
+        expect(statusReactionController.restoreInitial).toHaveBeenCalledTimes(1);
+      });
+      expect(statusReactionController.setError).toHaveBeenCalledTimes(1);
+      expect(statusReactionController.setDone).not.toHaveBeenCalled();
+      expect(
+        requireInvocationOrder(
+          statusReactionController.setThinking,
+          0,
+          "initial thinking status reaction",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(
+          statusReactionController.setError,
+          0,
+          "terminal error status reaction",
+        ),
+      );
+      expect(
+        requireInvocationOrder(
+          statusReactionController.setError,
+          0,
+          "terminal error status reaction",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(
+          statusReactionController.restoreInitial,
+          0,
+          "initial status reaction restoration",
+        ),
+      );
     },
   );
 
@@ -164,13 +208,8 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     const { answerDraftStream } = setupDraftStreams();
     let partialAccepted: boolean | void = undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
-      return await dispatchReplyWithBufferedBlockDispatcherRuntime({
-        ...params,
-        replyResolver: async (_ctx, opts) => {
-          partialAccepted = await opts?.onPartialReply?.({ text: "partial answer" });
-          throw new Error("unexpected model failure");
-        },
-      });
+      partialAccepted = await params.replyOptions?.onPartialReply?.({ text: "partial answer" });
+      throw new Error("unexpected model failure");
     });
 
     await dispatchWithContext({
