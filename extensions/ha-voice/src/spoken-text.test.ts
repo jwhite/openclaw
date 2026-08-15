@@ -257,4 +257,27 @@ describe("createIncrementalSpokenExtractor", () => {
     const extractor = createIncrementalSpokenExtractor();
     expect(extractor.push('{"Spoken":"Case should not matter."}')).toBe("Case should not matter.");
   });
+
+  it("streams nothing when contract-breaking prose opens with meta-reasoning", () => {
+    // The batch path strips these paragraphs before anything is spoken; a growing prefix can't
+    // be paragraph-analyzed, and speech can't be retracted once played.
+    const extractor = createIncrementalSpokenExtractor();
+    const first = extractor.push("Reasoning: the user wants the ");
+    const second = extractor.push("lights off.\n\nTurning them off now.");
+    expect(first + second).toBe("");
+  });
+
+  it("streams nothing when contract-breaking prose contains a code fence", () => {
+    const extractor = createIncrementalSpokenExtractor();
+    expect(extractor.push("Here is the config you asked for: ```yaml\nfoo: bar\n```")).toBe("");
+  });
+
+  it("still streams ordinary contract-breaking prose", () => {
+    // The common documented break is a plain conversational sentence - that must still stream,
+    // otherwise the fallback buys nothing on the turns it exists for.
+    const extractor = createIncrementalSpokenExtractor();
+    const first = extractor.push("Sure, turning off the bedroom ");
+    const second = extractor.push("lights now.");
+    expect(first + second).toBe("Sure, turning off the bedroom lights now.");
+  });
 });

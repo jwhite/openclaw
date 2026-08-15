@@ -4,9 +4,9 @@
  * Deliberately mirrors the voice-call plugin's `generateVoiceResponse` (same core
  * infrastructure: session store, workspace, runEmbeddedAgent) since a smart-speaker turn and a
  * phone-call turn have the same shape — get a real agent response for one line of transcribed
- * speech and hand back speakable text. Trimmed of phone-specific concerns (no transcript replay,
- * no early/streamed delivery — HA waits for one full HTTP response per turn, so there is no need
- * to flush partial text early the way a live call does).
+ * speech and hand back speakable text. Trimmed of phone-specific concerns (no transcript replay).
+ * Callers that want the answer sentence-by-sentence as it generates pass onSpokenChunk (S5.1);
+ * the returned result is identical either way.
  */
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../api.js";

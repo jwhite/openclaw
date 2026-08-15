@@ -251,6 +251,7 @@ export function createIncrementalSpokenExtractor(): IncrementalSpokenExtractor {
   let emittedLength = 0;
   let continueConversationValue = false;
   let plainTextMode = false;
+  let plainTextSuppressed = false;
 
   return {
     push(rawTextChunk: string): string {
@@ -286,6 +287,19 @@ export function createIncrementalSpokenExtractor(): IncrementalSpokenExtractor {
           return "";
         }
         plainTextMode = true;
+      }
+
+      // The batch path runs contract-breaking prose through sanitizePlainSpokenText before it is
+      // ever spoken; a growing prefix cannot be paragraph-analyzed that way, so rather than risk
+      // speaking meta-reasoning or a code fence aloud, suppress streaming for the rest of this
+      // turn and let the caller's terminal payload carry the sanitized batch text. Re-checked
+      // until the first emission, since "The user wants..." only reveals itself as reasoning
+      // once more of the sentence has arrived - after that, audio can't be un-spoken.
+      if (emittedLength === 0 && !plainTextSuppressed) {
+        plainTextSuppressed = isLikelyMetaReasoningParagraph(buffer) || buffer.includes("```");
+      }
+      if (plainTextSuppressed) {
+        return "";
       }
 
       if (buffer.length <= emittedLength) {

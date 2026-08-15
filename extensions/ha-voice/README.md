@@ -80,7 +80,7 @@ cap (same webhook guard defaults `webhooks` uses).
 
 Runs a real turn through `runtime.agent.runEmbeddedAgent` — the same core engine every channel
 uses, with the agent's real identity/tools/memory, not a stripped-down mode. **The model is
-overridden to `openrouter/google/gemini-3-flash-preview`** rather than inheriting the agent's
+overridden to `openrouter/moonshotai/kimi-k2.5`** rather than inheriting the agent's
 general-purpose default — measured 2026-07-29, the inherited default (a large reasoning model)
 took 16-21s per trivial turn and made multiple sequential provider round trips per turn, well
 past a spoken conversation's usability bar. The override trades some reasoning depth for latency
@@ -94,8 +94,25 @@ plugin uses for phone calls) so markdown, tool commentary, and meta-reasoning ne
 `src/spoken-text.ts` extracts and sanitizes the final text, with a plain-text fallback if the
 model doesn't follow the contract.
 
-Unlike `voice-call`, there is no early/streamed delivery — HA waits for one full HTTP response
-per conversation turn, so the whole exchange happens synchronously inside the request.
+### Response delivery
+
+The route answers in one of two shapes, chosen by standard content negotiation:
+
+- **Default (no `Accept: text/event-stream`)** — one full JSON body per turn, exactly as before:
+  `200 {ok, response, continueConversation, traceId}`, or `502 {ok:false, error, traceId}`.
+- **SSE (`Accept: text/event-stream`)** — the spoken answer streams sentence-by-sentence as the
+  model generates it, so TTS can start before the full answer exists. Events: `chunk`
+  (`{text}`), `reset` (a tool call or rejected retry discarded what streamed so far, so the next
+  `chunk` begins a new utterance), and exactly one terminal `done`/`error` carrying the same
+  payload the JSON body would have. Because headers flush before generation starts, a failed
+  turn is reported by the terminal `error` event — the status code is always `200`.
+
+The terminal event carries the full canonical text as well as the deltas, and **the terminal
+payload is the authoritative one** — the deltas can differ, since the batch path trims and
+sanitizes in ways a growing prefix cannot. When the model breaks the JSON contract entirely
+(a real, measured failure mode) the deltas fall back to raw prose, and stream nothing at all if
+that prose opens with meta-reasoning or a code fence, since neither is safe to speak aloud and
+neither can be retracted once played.
 
 ## Status
 
