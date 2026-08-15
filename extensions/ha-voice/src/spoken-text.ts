@@ -97,6 +97,9 @@ function tryParseSpokenJson(text: string): ParsedSpokenPayload | null {
     }
   }
 
+  // Same "spoken":"..." shape as SPOKEN_VALUE_PATTERN below (shared by the incremental decode
+  // path), plus a required closing quote - a complete payload, unlike a streaming chunk, always
+  // has one. Keep both in sync if the contract's escaping/quoting rules ever change.
   const inlineSpokenMatch = trimmed.match(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
   if (!inlineSpokenMatch) {
     return null;
@@ -180,6 +183,126 @@ const PRONUNCIATION_FIXUPS: ReadonlyArray<readonly [RegExp, string]> = [
 
 function applyPronunciationFixups(text: string): string {
   return PRONUNCIATION_FIXUPS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), text);
+}
+
+/** Shared with tryParseSpokenJson's inline fallback (which additionally requires a closing
+ * quote) so the two decode paths can't silently drift on the "spoken" field's raw value. Case-
+ * insensitive to match that inline fallback's own /i flag. */
+const SPOKEN_VALUE_PATTERN = /"spoken"\s*:\s*"((?:[^"\\]|\\.)*)/i;
+const CONTINUE_CONVERSATION_PATTERN = /"continueConversation"\s*:\s*(true|false)/i;
+
+/**
+ * Extracts as much of "spoken"'s value as is currently decodable from a growing, possibly-
+ * incomplete JSON buffer (streamed token-by-token). Loops trimming trailing incomplete/lone-
+ * surrogate `\uXXXX` escapes (a non-ASCII char split across a chunk boundary) since trimming one
+ * can expose another underneath it - e.g. an emoji's low surrogate cut mid-escape leaves a
+ * complete-looking high surrogate that must also be held back. Uses JSON.parse for the actual
+ * decode rather than hand-rolling escapes.
+ */
+// Matches a trailing incomplete \uXXXX (0-3 hex digits) or a trailing *complete* high-surrogate
+// escape (\uD800-\uDBFF, still waiting for its low-surrogate partner) - both cases trim back by
+// the same "\u" (2 chars) plus however many hex digits were captured.
+const TRAILING_INCOMPLETE_UNICODE_ESCAPE = /\\u([0-9a-fA-F]{0,3}|[dD][89abAB][0-9a-fA-F]{2})$/;
+
+function tryExtractPartialSpoken(buffer: string): string | null {
+  const match = buffer.match(SPOKEN_VALUE_PATTERN);
+  if (!match) {
+    return null;
+  }
+  let raw = match[1] ?? "";
+  for (;;) {
+    const incompleteEscape = raw.match(TRAILING_INCOMPLETE_UNICODE_ESCAPE);
+    if (!incompleteEscape) {
+      break;
+    }
+    raw = raw.slice(0, raw.length - 2 - incompleteEscape[1].length);
+  }
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return null;
+  }
+}
+
+export type IncrementalSpokenExtractor = {
+  /** Feed the next raw text chunk (in stream order); returns the newly-available speakable
+   * delta (pronunciation fixups applied), or "" when nothing new is decodable yet. */
+  push(rawTextChunk: string): string;
+  /** Best-known continueConversation value; only meaningful once the JSON object has closed. */
+  continueConversation(): boolean;
+};
+
+/**
+ * Stateful, incremental counterpart to extractSpokenTextFromPayloads - handles "spoken" arriving
+ * in pieces across onBlockReply chunks (S5.1). Deltas diff against the raw decoded text (always
+ * a growing prefix); fixups apply per-delta rather than to the re-diffed whole, since a fixup
+ * word straddling a chunk boundary can otherwise retroactively rewrite already-emitted output
+ * (see the "never corrupts already-emitted text" test). Falls back to streaming raw plain-text
+ * chunks once enough buffer has accumulated with no "spoken" key in sight, matching the batch
+ * path's own tolerance for a broken JSON contract. Callers must discard an instance and start a
+ * fresh one at a tool_start/pre_compaction boundary - see response-generator.ts.
+ */
+// Below this many buffered characters with no "spoken" key found yet, stay in JSON-waiting mode
+// rather than risk a false-positive plain-text fallback on a very short, still-forming chunk.
+const PLAIN_TEXT_FALLBACK_MIN_BUFFER = 20;
+
+export function createIncrementalSpokenExtractor(): IncrementalSpokenExtractor {
+  let buffer = "";
+  let emittedLength = 0;
+  let continueConversationValue = false;
+  let plainTextMode = false;
+
+  return {
+    push(rawTextChunk: string): string {
+      buffer += rawTextChunk;
+
+      if (!plainTextMode) {
+        // continueConversation follows spoken in the schema, so by the time it appears spoken
+        // has normally already finished growing - checked unconditionally (not gated on new
+        // spoken text), but only while still in JSON mode; plain text provably has no such key.
+        const ccMatch = buffer.match(CONTINUE_CONVERSATION_PATTERN);
+        if (ccMatch) {
+          continueConversationValue = ccMatch[1].toLowerCase() === "true";
+        }
+
+        const decodedSoFar = tryExtractPartialSpoken(buffer);
+        if (decodedSoFar !== null) {
+          if (decodedSoFar.length <= emittedLength) {
+            return "";
+          }
+          const rawDelta = decodedSoFar.slice(emittedLength);
+          emittedLength = decodedSoFar.length;
+          return applyPronunciationFixups(rawDelta.replace(/\s+/g, " "));
+        }
+        // No "spoken" key has appeared despite enough buffered text - this model/provider
+        // breaks SPOKEN_OUTPUT_RESPONSE_FORMAT's contract on a real, measured fraction of turns
+        // (see SPOKEN_OUTPUT_RESPONSE_FORMAT's own comment), so without this the whole turn would
+        // stream nothing. Falls back to streaming the raw buffer directly, same tolerance the
+        // batch path (sanitizePlainSpokenText) already has for contract-breaking plain prose.
+        // Any JSON-object opening means a contract response is still forming (the "spoken" key
+        // may simply not have streamed yet, and nothing guarantees it streams before
+        // "continueConversation") - only genuinely non-JSON output falls through to plain text.
+        if (buffer.length < PLAIN_TEXT_FALLBACK_MIN_BUFFER || buffer.trimStart().startsWith("{")) {
+          return "";
+        }
+        plainTextMode = true;
+      }
+
+      if (buffer.length <= emittedLength) {
+        return "";
+      }
+      const rawDelta = buffer.slice(emittedLength);
+      emittedLength = buffer.length;
+      // Collapses internal whitespace runs like normalizeSpokenText's batch-path counterpart,
+      // matching the final canonical text - trim is deliberately not applied here (see the
+      // class docstring above): trimming a growing prefix can eat a boundary space that turns
+      // out to be internal once more text arrives.
+      return applyPronunciationFixups(rawDelta.replace(/\s+/g, " "));
+    },
+    continueConversation() {
+      return continueConversationValue;
+    },
+  };
 }
 
 export function extractSpokenTextFromPayloads(payloads: SpokenPayload[]): ExtractedSpokenResult {
