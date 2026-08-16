@@ -185,6 +185,45 @@ describe("ha-voice converse webhook streaming (S5.2)", () => {
     expect(res.writableEnded).toBe(true);
   });
 
+  it("reports a turn that produced no speech as a silent success, not a failure", async () => {
+    // SPOKEN_OUTPUT_CONTRACT lets the agent answer {"spoken":""} when there is nothing worth
+    // saying. Observed live 2026-08-16: reporting that as ok:false made the satellite announce
+    // "Sorry, I couldn't reach OpenClaw just now" for a turn that had reached the agent and run
+    // to completion.
+    generateMock.mockResolvedValue({
+      text: null,
+      continueConversation: false,
+      traceId: "trace-silent",
+    });
+    const res = createStreamingResponse();
+
+    await createHandler()(createRequest({ accept: "text/event-stream" }), res);
+
+    const done = parseSseEvents(res.chunks).at(-1);
+    expect(done?.event).toBe("done");
+    expect(done?.data).toEqual({
+      ok: true,
+      response: "",
+      continueConversation: false,
+      traceId: "trace-silent",
+    });
+  });
+
+  it("returns 200 with an empty response when a non-streaming turn produced no speech", async () => {
+    generateMock.mockResolvedValue({ text: null, traceId: "trace-silent-2" });
+    const res = createStreamingResponse();
+
+    await createHandler()(createRequest({}), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.chunks.join(""))).toEqual({
+      ok: true,
+      response: "",
+      continueConversation: false,
+      traceId: "trace-silent-2",
+    });
+  });
+
   it("returns 502 with the error body when a non-streaming turn fails", async () => {
     generateMock.mockResolvedValue({ text: null, error: "boom", traceId: "trace-8" });
     const res = createStreamingResponse();

@@ -10,11 +10,14 @@ export const SPOKEN_OUTPUT_CONTRACT = [
     '- Return only valid JSON in this exact shape: {"spoken":"...","continueConversation":false}',
     "- Do not include markdown, code fences, planning text, or extra keys.",
     '- Put exactly what should be spoken aloud into "spoken".',
-    '- If there is nothing to say, return {"spoken":""}.',
-    '- "continueConversation" is required. Set it to true when your reply expects the user to',
-    "  respond before the exchange is really done - a clarifying question, confirming a multi-step",
-    '  action you just took, or an open invitation like "anything else?". Set it to false for a',
-    "  complete, standalone answer that doesn't need a reply.",
+    '- If there is nothing to say, return {"spoken":""}. Reserve this for input that is not',
+    "  addressed to you or is too garbled to act on - if the user said something to you, answer it,",
+    "  even if only to say you did not follow.",
+    '- "continueConversation" is required and defaults to false. Set it to true only when your own',
+    "  spoken text actually asks the user something or invites a reply: a clarifying question you",
+    '  need answered before you can act, or an explicit offer like "anything else?". If your spoken',
+    "  text makes no request of the user, it is false - however interesting the topic, and however",
+    "  much more you could say about it. A complete, informative answer is false.",
 ].join("\n");
 /**
  * Enforces SPOKEN_OUTPUT_CONTRACT's shape at the provider level (OpenAI-Responses-API structured

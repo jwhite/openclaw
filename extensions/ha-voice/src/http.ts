@@ -55,18 +55,26 @@ type HaVoiceConverseOutcome = {
 };
 
 /** Single source of truth for the turn's terminal payload, so the streaming terminal event and
- * the non-streaming JSON body can never drift apart on shape or semantics (S5.2). */
+ * the non-streaming JSON body can never drift apart on shape or semantics (S5.2).
+ *
+ * `ok` tracks whether the turn ran, not whether it produced speech. SPOKEN_OUTPUT_CONTRACT
+ * explicitly lets the model answer `{"spoken":""}` when there is nothing worth saying (a
+ * half-heard utterance, say), and a turn that completes with no speech is a silent success, not a
+ * failure. Reporting it as an error made the satellite announce a connectivity problem for a
+ * request that had reached the agent and run to completion. Only a real error or an abort — both
+ * of which set `error` upstream — is a failure.
+ */
 function buildConverseOutcome(
   result: Awaited<ReturnType<typeof generateHaVoiceResponse>>,
 ): HaVoiceConverseOutcome {
-  return result.text
-    ? {
+  return result.error
+    ? { ok: false, error: result.error, traceId: result.traceId }
+    : {
         ok: true,
-        response: result.text,
+        response: result.text ?? "",
         continueConversation: result.continueConversation === true,
         traceId: result.traceId,
-      }
-    : { ok: false, error: result.error ?? "No response generated", traceId: result.traceId };
+      };
 }
 
 /** S5.2: opt-in via standard SSE content negotiation, so existing non-streaming callers keep
