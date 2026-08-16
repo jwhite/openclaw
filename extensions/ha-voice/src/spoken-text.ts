@@ -182,7 +182,10 @@ const PRONUNCIATION_FIXUPS: ReadonlyArray<readonly [RegExp, string]> = [
 ];
 
 function applyPronunciationFixups(text: string): string {
-  return PRONUNCIATION_FIXUPS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), text);
+  return PRONUNCIATION_FIXUPS.reduce(
+    (acc, [pattern, replacement]) => acc.replace(pattern, replacement),
+    text,
+  );
 }
 
 /** Shared with tryParseSpokenJson's inline fallback (which additionally requires a closing
@@ -225,93 +228,128 @@ function tryExtractPartialSpoken(buffer: string): string | null {
 }
 
 export type IncrementalSpokenExtractor = {
-  /** Feed the next raw text chunk (in stream order); returns the newly-available speakable
-   * delta (pronunciation fixups applied), or "" when nothing new is decodable yet. */
-  push(rawTextChunk: string): string;
+  /** Feed the cumulative raw assistant text — a snapshot of everything generated so far, not a
+   * delta. Returns only the newly-speakable text (pronunciation fixups applied), or "". */
+  pushSnapshot(fullRawText: string): string;
+  /** Releases the deliberately-held trailing partial word once no more snapshots are coming.
+   * Without this the final word of a plain-text answer would never be spoken. */
+  flush(): string;
   /** Best-known continueConversation value; only meaningful once the JSON object has closed. */
   continueConversation(): boolean;
 };
 
 /**
- * Stateful, incremental counterpart to extractSpokenTextFromPayloads - handles "spoken" arriving
- * in pieces across onBlockReply chunks (S5.1). Deltas diff against the raw decoded text (always
- * a growing prefix); fixups apply per-delta rather than to the re-diffed whole, since a fixup
- * word straddling a chunk boundary can otherwise retroactively rewrite already-emitted output
- * (see the "never corrupts already-emitted text" test). Falls back to streaming raw plain-text
- * chunks once enough buffer has accumulated with no "spoken" key in sight, matching the batch
- * path's own tolerance for a broken JSON contract. Callers must discard an instance and start a
- * fresh one at a tool_start/pre_compaction boundary - see response-generator.ts.
+ * Stateful, incremental counterpart to extractSpokenTextFromPayloads (S5.1).
+ *
+ * Takes cumulative snapshots rather than appended chunks, and that is load-bearing rather than
+ * incidental: the obvious source, onBlockReply, hands out a *lossy* partition — the block chunker
+ * drops the whitespace at every break point (right for chat messages, where each chunk is its own
+ * message) so rejoining its chunks yields "The quick"+"brown fox" = "quickbrown", which TTS then
+ * pronounces as an invented word. Diffing successive snapshots of the assistant stream's own
+ * cumulative text cannot lose a separator that way.
+ *
+ * Falls back to streaming raw prose when the model breaks the JSON contract outright, and
+ * suppresses even that if the prose opens with meta-reasoning or a code fence, neither of which
+ * is safe to speak and neither of which can be recalled once played.
  */
-// Below this many buffered characters with no "spoken" key found yet, stay in JSON-waiting mode
-// rather than risk a false-positive plain-text fallback on a very short, still-forming chunk.
+// Below this many characters with no "spoken" key seen yet, stay in JSON-waiting mode rather than
+// risk a false-positive plain-text fallback on a snapshot that is still forming.
 const PLAIN_TEXT_FALLBACK_MIN_BUFFER = 20;
 
+// A trailing run of word characters may still be growing ("swal" -> "swale"), and every
+// PRONUNCIATION_FIXUPS rule is \b-anchored, so normalizing it now would either miss the rule or
+// emit letters that the completed word rewrites. Held back until the next snapshot completes the
+// word, or until flush().
+const TRAILING_PARTIAL_WORD = /[\p{L}\p{N}'’-]+$/u;
+
+/** The same closing-quote-terminated shape tryParseSpokenJson uses: once it matches, "spoken" has
+ * finished streaming and its last word can be released without waiting for flush(). */
+const SPOKEN_VALUE_CLOSED_PATTERN = /"spoken"\s*:\s*"(?:[^"\\]|\\.)*"/i;
+
+/** Matches normalizeSpokenText's batch-path collapsing, then applies the \b-anchored TTS
+ * respellings. Applied to the whole cumulative text rather than to a delta: a word-level rule that
+ * only ever sees half a word silently does nothing, which is how streamed audio said "swale" while
+ * the returned text said "swayl". */
+function normalizeForSpeech(text: string): string {
+  return applyPronunciationFixups(text.replace(/\s+/g, " "));
+}
+
 export function createIncrementalSpokenExtractor(): IncrementalSpokenExtractor {
-  let buffer = "";
-  let emittedLength = 0;
+  let emitted = "";
+  let pendingDecoded = "";
   let continueConversationValue = false;
   let plainTextMode = false;
   let plainTextSuppressed = false;
 
-  return {
-    push(rawTextChunk: string): string {
-      buffer += rawTextChunk;
+  /**
+   * Normalizes the cumulative text and returns only what extends what has already been spoken.
+   *
+   * The three cases are deliberately distinct. Already covered (a repeat snapshot, or one whose
+   * held-back trailing word makes it shorter than what was spoken) must leave `emitted` alone:
+   * rewinding it would let a later flush re-speak, or newly speak, text that was already settled.
+   * A true divergence means the model replaced its own answer mid-flight; audio already spoken
+   * cannot be recalled, so adopt the new text silently rather than repeat what was heard.
+   */
+  const emitThrough = (stableDecoded: string): string => {
+    const normalized = normalizeForSpeech(stableDecoded);
+    if (emitted.startsWith(normalized)) {
+      return "";
+    }
+    if (!normalized.startsWith(emitted)) {
+      emitted = normalized;
+      return "";
+    }
+    const delta = normalized.slice(emitted.length);
+    emitted = normalized;
+    return delta;
+  };
 
+  return {
+    pushSnapshot(fullRawText: string): string {
       if (!plainTextMode) {
-        // continueConversation follows spoken in the schema, so by the time it appears spoken
-        // has normally already finished growing - checked unconditionally (not gated on new
-        // spoken text), but only while still in JSON mode; plain text provably has no such key.
-        const ccMatch = buffer.match(CONTINUE_CONVERSATION_PATTERN);
+        // continueConversation follows spoken in the schema, so by the time it appears spoken has
+        // normally already finished growing - checked on every snapshot, not gated on new text.
+        const ccMatch = fullRawText.match(CONTINUE_CONVERSATION_PATTERN);
         if (ccMatch) {
           continueConversationValue = ccMatch[1].toLowerCase() === "true";
         }
+      }
 
-        const decodedSoFar = tryExtractPartialSpoken(buffer);
-        if (decodedSoFar !== null) {
-          if (decodedSoFar.length <= emittedLength) {
-            return "";
-          }
-          const rawDelta = decodedSoFar.slice(emittedLength);
-          emittedLength = decodedSoFar.length;
-          return applyPronunciationFixups(rawDelta.replace(/\s+/g, " "));
-        }
-        // No "spoken" key has appeared despite enough buffered text - this model/provider
-        // breaks SPOKEN_OUTPUT_RESPONSE_FORMAT's contract on a real, measured fraction of turns
-        // (see SPOKEN_OUTPUT_RESPONSE_FORMAT's own comment), so without this the whole turn would
-        // stream nothing. Falls back to streaming the raw buffer directly, same tolerance the
-        // batch path (sanitizePlainSpokenText) already has for contract-breaking plain prose.
-        // Any JSON-object opening means a contract response is still forming (the "spoken" key
-        // may simply not have streamed yet, and nothing guarantees it streams before
-        // "continueConversation") - only genuinely non-JSON output falls through to plain text.
-        if (buffer.length < PLAIN_TEXT_FALLBACK_MIN_BUFFER || buffer.trimStart().startsWith("{")) {
+      let decoded = plainTextMode ? fullRawText : tryExtractPartialSpoken(fullRawText);
+      if (decoded === null) {
+        // Any JSON-object opening means a contract response is still forming (nothing guarantees
+        // "spoken" streams before "continueConversation") - only genuinely non-JSON output falls
+        // through to the plain-prose path the batch side also tolerates.
+        if (
+          fullRawText.length < PLAIN_TEXT_FALLBACK_MIN_BUFFER ||
+          fullRawText.trimStart().startsWith("{")
+        ) {
           return "";
         }
         plainTextMode = true;
+        decoded = fullRawText;
       }
 
-      // The batch path runs contract-breaking prose through sanitizePlainSpokenText before it is
-      // ever spoken; a growing prefix cannot be paragraph-analyzed that way, so rather than risk
-      // speaking meta-reasoning or a code fence aloud, suppress streaming for the rest of this
-      // turn and let the caller's terminal payload carry the sanitized batch text. Re-checked
-      // until the first emission, since "The user wants..." only reveals itself as reasoning
-      // once more of the sentence has arrived - after that, audio can't be un-spoken.
-      if (emittedLength === 0 && !plainTextSuppressed) {
-        plainTextSuppressed = isLikelyMetaReasoningParagraph(buffer) || buffer.includes("```");
-      }
-      if (plainTextSuppressed) {
-        return "";
+      if (plainTextMode) {
+        if (emitted.length === 0 && !plainTextSuppressed) {
+          plainTextSuppressed = isLikelyMetaReasoningParagraph(decoded) || decoded.includes("```");
+        }
+        if (plainTextSuppressed) {
+          return "";
+        }
       }
 
-      if (buffer.length <= emittedLength) {
-        return "";
+      pendingDecoded = decoded;
+      // Once the JSON string has closed, nothing more can extend the last word, so release it
+      // immediately instead of making the caller's flush() supply the final word of every answer.
+      const spokenValueClosed = !plainTextMode && SPOKEN_VALUE_CLOSED_PATTERN.test(fullRawText);
+      if (spokenValueClosed) {
+        return emitThrough(decoded);
       }
-      const rawDelta = buffer.slice(emittedLength);
-      emittedLength = buffer.length;
-      // Collapses internal whitespace runs like normalizeSpokenText's batch-path counterpart,
-      // matching the final canonical text - trim is deliberately not applied here (see the
-      // class docstring above): trimming a growing prefix can eat a boundary space that turns
-      // out to be internal once more text arrives.
-      return applyPronunciationFixups(rawDelta.replace(/\s+/g, " "));
+      return emitThrough(decoded.replace(TRAILING_PARTIAL_WORD, ""));
+    },
+    flush(): string {
+      return emitThrough(pendingDecoded);
     },
     continueConversation() {
       return continueConversationValue;

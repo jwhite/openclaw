@@ -150,18 +150,15 @@ export async function generateHaVoiceResponse(
             `identity-prompt=${Date.now() - tSessionReady}ms preModelTotal=${Date.now() - tCallStart}ms`,
         );
 
-        // S5.1: streams the spoken-JSON answer sentence-by-sentence via the same block-reply
-        // machinery channel previews use (docs/concepts/streaming.md), decoded incrementally
-        // since the raw stream is JSON-wrapped (SPOKEN_OUTPUT_RESPONSE_FORMAT), not plain text.
-        // onBlockReplyFlush mirrors extensions/voice-call's own pattern for the same hazard: a
-        // tool call or a rejected/retried attempt can leave stale chunks arriving after a
-        // boundary, so every reset here starts a fresh extractor and rejects anything at or
-        // before the last known tool boundary.
-        let onBlockReply:
-          | ((
-              payload: { text?: string; isReasoning?: boolean; isCommentary?: boolean },
-              context?: { assistantMessageIndex?: number },
-            ) => void)
+        // S5.1: streams the answer as it generates, decoded incrementally because the raw stream
+        // is JSON-wrapped (SPOKEN_OUTPUT_RESPONSE_FORMAT), not plain text. Reads the assistant
+        // stream's *cumulative* text rather than onBlockReply: block-reply chunks are a lossy
+        // partition (the chunker drops the whitespace at each break, so rejoining them welds
+        // words together and TTS speaks invented words) — see createIncrementalSpokenExtractor.
+        // onBlockReplyFlush still marks tool/rejected-retry boundaries, where the next text is a
+        // new utterance rather than a continuation.
+        let onAgentEvent:
+          | ((evt: { stream: string; data: Record<string, unknown> }) => void)
           | undefined;
         let onBlockReplyFlush:
           | ((context: {
@@ -170,45 +167,48 @@ export async function generateHaVoiceResponse(
               attemptAccepted?: boolean;
             }) => void)
           | undefined;
+        // Releases the extractor's held trailing partial word once the run can produce no more
+        // snapshots — without it the last word of a plain-text answer is never spoken.
+        let flushSpokenTail: (() => void) | undefined;
         if (params.onSpokenChunk) {
           const onSpokenChunk = params.onSpokenChunk;
           let spokenExtractor = createIncrementalSpokenExtractor();
-          let latestToolBoundaryMessageIndex: number | undefined;
-          onBlockReply = (payload, context) => {
-            if (latestToolBoundaryMessageIndex !== undefined) {
-              const messageIndex = context?.assistantMessageIndex;
-              if (messageIndex === undefined || messageIndex <= latestToolBoundaryMessageIndex) {
-                return;
-              }
-            }
-            // Tool-progress/commentary/reasoning is never part of the final spoken-JSON answer.
-            if (payload.isReasoning || payload.isCommentary || !payload.text) {
-              return;
-            }
-            const delta = spokenExtractor.push(payload.text);
+          // A caller's callback throwing (e.g. a closed socket once S5.2 wires real delivery)
+          // must not abort the whole agent run over a streaming-delivery failure — the batch
+          // result.text path below still succeeds independently of this.
+          const deliver = (delta: string) => {
             if (!delta) {
               return;
             }
             try {
-              // A caller's callback throwing (e.g. a closed socket once S5.2 wires real
-              // delivery) must not abort the whole agent run over a streaming-delivery failure
-              // — the batch result.text path below still succeeds independently of this.
               onSpokenChunk(delta);
             } catch (err) {
               console.error(`[ha-voice] onSpokenChunk threw, continuing without streaming: ${err}`);
             }
           };
+          flushSpokenTail = () => deliver(spokenExtractor.flush());
+          onAgentEvent = (evt) => {
+            if (evt.stream !== "assistant") {
+              return;
+            }
+            const data = evt.data as { text?: unknown; phase?: unknown };
+            // "commentary" is pre-tool narration ("I'll check that...") - a display lane, never
+            // part of the spoken answer.
+            if (data.phase === "commentary") {
+              return;
+            }
+            if (typeof data.text !== "string" || data.text.length === 0) {
+              return;
+            }
+            deliver(spokenExtractor.pushSnapshot(data.text));
+          };
           onBlockReplyFlush = (context) => {
-            if (context.reason === "tool_start") {
-              latestToolBoundaryMessageIndex = context.assistantMessageIndex;
-            } else if (context.reason === "pre_compaction") {
+            if (context.reason === "pre_compaction" && context.attemptAccepted) {
               // An accepted attempt's answer continues uninterrupted - only a rejected one is
               // discarded and retried, which is what actually invalidates the buffer.
-              if (context.attemptAccepted) {
-                return;
-              }
-              latestToolBoundaryMessageIndex = undefined;
-            } else {
+              return;
+            }
+            if (context.reason !== "tool_start" && context.reason !== "pre_compaction") {
               return;
             }
             // Both boundaries can be followed by a differently-shaped attempt (post-tool answer,
@@ -216,6 +216,8 @@ export async function generateHaVoiceResponse(
             // Whatever already streamed via onSpokenChunk can't be un-sent (same as TTS audio
             // already playing can't be un-spoken), so the consumer needs its own signal that
             // what follows is a fresh, disconnected utterance, not a continuation.
+            // Release the held partial word first, so the abandoned fragment ends on a whole word.
+            deliver(spokenExtractor.flush());
             spokenExtractor = createIncrementalSpokenExtractor();
             params.onSpokenReset?.();
           };
@@ -252,20 +254,13 @@ export async function generateHaVoiceResponse(
           // construction cost — that stage builds every installed plugin's tools as a single
           // all-or-nothing unit regardless of the allowlist content.
           toolsAllow: RESPONSE_TOOLS_ALLOW,
-          onBlockReply,
+          // Deliberately no blockReplyChunking/blockReplyBreak: streaming reads the assistant
+          // stream's cumulative text, so the block chunker is neither used nor paid for here.
+          onAgentEvent,
           onBlockReplyFlush,
-          // Gated on onSpokenChunk like onBlockReply above - unset today (S5.2 is the first real
-          // caller), and an unused chunker still costs real per-token work on this latency-
-          // sensitive path (see RESPONSE_TOOLS_ALLOW's own comment) if constructed regardless.
-          ...(params.onSpokenChunk
-            ? {
-                // Sentence-sized, not paragraph-sized — the point is starting TTS sooner, and a
-                // paragraph-sized chunk defeats that. text_end flushes as the chunker emits.
-                blockReplyChunking: { minChars: 20, maxChars: 150, breakPreference: "sentence" as const },
-                blockReplyBreak: "text_end" as const,
-              }
-            : {}),
         });
+        // No further snapshots can arrive, so the extractor's held final word is safe to speak.
+        flushSpokenTail?.();
 
         const extracted = extractSpokenTextFromPayloads((result.payloads ?? []) as SpokenPayload[]);
         if (!extracted.text && result.meta?.aborted) {

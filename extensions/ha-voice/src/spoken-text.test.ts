@@ -3,7 +3,9 @@ import { createIncrementalSpokenExtractor, extractSpokenTextFromPayloads } from 
 
 describe("extractSpokenTextFromPayloads", () => {
   it("extracts the spoken field from a JSON-contract payload", () => {
-    const result = extractSpokenTextFromPayloads([{ text: '{"spoken":"Bedroom lights are off."}' }]);
+    const result = extractSpokenTextFromPayloads([
+      { text: '{"spoken":"Bedroom lights are off."}' },
+    ]);
     expect(result.text).toBe("Bedroom lights are off.");
     expect(result.continueConversation).toBe(false);
   });
@@ -118,166 +120,174 @@ describe("extractSpokenTextFromPayloads", () => {
 });
 
 describe("createIncrementalSpokenExtractor", () => {
-  it("yields the full value in one delta when fed as a single chunk", () => {
+  /** The assistant stream hands out cumulative snapshots, so tests feed growing prefixes. */
+  const snapshots = (
+    extractor: ReturnType<typeof createIncrementalSpokenExtractor>,
+    steps: string[],
+  ) => steps.map((s) => extractor.pushSnapshot(s));
+
+  it("yields the full value in one delta when the whole snapshot arrives at once", () => {
     const extractor = createIncrementalSpokenExtractor();
-    const delta = extractor.push('{"spoken":"Bedroom lights are off.","continueConversation":false}');
-    expect(delta).toBe("Bedroom lights are off.");
+    expect(
+      extractor.pushSnapshot('{"spoken":"Bedroom lights are off.","continueConversation":false}'),
+    ).toBe("Bedroom lights are off.");
   });
 
-  it("yields growing deltas as a JSON string streams in token-sized pieces", () => {
+  it("preserves word boundaries across snapshots — the defect that made TTS speak invented words", () => {
+    // Regression: the previous design appended onBlockReply chunks, which are a lossy partition
+    // (the chunker drops the whitespace at each break), yielding "The quick"+"brown fox" =
+    // "quickbrown". Concatenated deltas must reproduce the text exactly, spaces included.
     const extractor = createIncrementalSpokenExtractor();
-    const chunks = ['{"spo', 'ken":"', "Turning off the ", "bedroom lights", '.","continueConv', 'ersation":false}'];
-    const deltas = chunks.map((c) => extractor.push(c));
-    expect(deltas.join("")).toBe("Turning off the bedroom lights.");
-    // Each individual push only returns what's newly decodable, not a repeat of prior text.
-    expect(deltas.filter((d) => d.length > 0)).toEqual([
-      "Turning off the ",
-      "bedroom lights",
-      ".",
+    const deltas = snapshots(extractor, [
+      '{"spoken":"The quick',
+      '{"spoken":"The quick brown fox jumps over',
+      '{"spoken":"The quick brown fox jumps over the lazy dog."}',
     ]);
+    expect(deltas.join("")).toBe("The quick brown fox jumps over the lazy dog.");
   });
 
-  it("produces nothing before the spoken key has appeared in the buffer", () => {
+  it("emits only the newly-decodable part of each snapshot", () => {
     const extractor = createIncrementalSpokenExtractor();
-    expect(extractor.push("{")).toBe("");
-    expect(extractor.push('"con')).toBe("");
+    const deltas = snapshots(extractor, [
+      '{"spoken":"Turning off ',
+      '{"spoken":"Turning off the bedroom lights."}',
+    ]);
+    expect(deltas).toEqual(["Turning off ", "the bedroom lights."]);
   });
 
-  it("holds back a chunk that ends mid-escape-sequence until the next chunk completes it", () => {
+  it("produces nothing before the spoken key has appeared", () => {
     const extractor = createIncrementalSpokenExtractor();
-    // The literal text is: Wait — really?  ("—" is an em dash, escaped as \\u2014 in JSON)
-    const first = extractor.push('{"spoken":"Wait \\u201');
-    const second = extractor.push('4really?"}');
-    expect(first).toBe("Wait ");
-    expect(second).toBe("—really?");
+    expect(extractor.pushSnapshot("{")).toBe("");
+    expect(extractor.pushSnapshot('{"con')).toBe("");
   });
 
-  it("handles a chunk boundary landing exactly after a backslash", () => {
+  it("holds back an incomplete unicode escape until the next snapshot completes it", () => {
     const extractor = createIncrementalSpokenExtractor();
-    const first = extractor.push('{"spoken":"Quote: \\');
-    const second = extractor.push('"end quote\\""}');
-    expect(first + second).toBe('Quote: "end quote"');
+    expect(extractor.pushSnapshot('{"spoken":"Wait \\u201')).toBe("Wait ");
+    expect(extractor.pushSnapshot('{"spoken":"Wait \\u2014really?"}')).toBe("\u2014really?");
   });
 
-  it("reports continueConversation:true even though it arrives after spoken has finished streaming", () => {
-    // Regression: continueConversation arrives after spoken in the schema's key order, so a
-    // naive implementation that only checks it when spoken just grew never reaches this check
-    // in the (normal) case where spoken has already finished by the time it appears.
+  it("holds back a lone high surrogate until its partner arrives", () => {
     const extractor = createIncrementalSpokenExtractor();
-    extractor.push('{"spoken":"Which one?"');
-    expect(extractor.continueConversation()).toBe(false);
-    extractor.push(',"continueConversation":true}');
-    expect(extractor.continueConversation()).toBe(true);
-  });
-
-  it("returns an empty delta on repeated pushes once fully decoded and unchanged", () => {
-    const extractor = createIncrementalSpokenExtractor();
-    extractor.push('{"spoken":"Done."}');
-    expect(extractor.push("")).toBe("");
-  });
-
-  it("applies pronunciation fixups to streamed deltas, matching the batch extraction path", () => {
-    // Regression: streamed deltas must not silently skip the same fixups
-    // extractSpokenTextFromPayloads applies to the batch path.
-    const extractor = createIncrementalSpokenExtractor();
-    const delta = extractor.push('{"spoken":"Check the swale after rain."}');
-    expect(delta).toBe("Check the swayl after rain.");
-  });
-
-  it("never corrupts already-emitted text when a fixup word straddles a chunk boundary", () => {
-    // Regression: fixups must be applied per-delta (against a stable raw baseline), not to the
-    // whole accumulated text re-diffed by length each time - the latter retroactively changes
-    // characters at an index earlier than what was already emitted whenever the original and
-    // replacement text diverge before the split point (here: "swal" | "e", "swale" -> "swayl"
-    // diverges at index 3, inside the already-emitted "swal"), producing garbled output.
-    const extractor = createIncrementalSpokenExtractor();
-    const first = extractor.push('{"spoken":"Check the swal');
-    const second = extractor.push('e after rain."}');
-    // The accepted tradeoff: split exactly across the fixup word, so it's not corrected - but
-    // the emitted text must still be exactly the real (unfixed) words, never a corrupted hybrid.
-    expect(first + second).toBe("Check the swale after rain.");
-  });
-
-  it("holds back a complete high-surrogate escape until its low-surrogate partner arrives", () => {
-    // An astral character (here: 😀, U+1F600) is encoded in JSON as a UTF-16 surrogate pair
-    // 😀. A chunk boundary landing exactly between the two escapes must not decode
-    // the lone high surrogate on its own.
-    const extractor = createIncrementalSpokenExtractor();
-    const first = extractor.push('{"spoken":"Great \\uD83D');
-    const second = extractor.push('\\uDE00 done."}');
-    expect(first).toBe("Great ");
-    expect(second).toBe("😀 done.");
+    expect(extractor.pushSnapshot('{"spoken":"Great \\uD83D')).toBe("Great ");
+    expect(extractor.pushSnapshot('{"spoken":"Great \\uD83D\\uDE00 done."}')).toBe(
+      "\u{1F600} done.",
+    );
   });
 
   it("holds back the exposed high surrogate when the boundary lands inside the low surrogate", () => {
-    // Regression: trimming the incomplete low-surrogate escape can expose a now-complete-looking
-    // high surrogate underneath it, which must also be held back rather than decoded alone.
     const extractor = createIncrementalSpokenExtractor();
-    const first = extractor.push('{"spoken":"Great \\uD83D\\uDE0');
-    const second = extractor.push('0 done."}');
-    expect(first).toBe("Great ");
-    expect(second).toBe("😀 done.");
+    expect(extractor.pushSnapshot('{"spoken":"Great \\uD83D\\uDE0')).toBe("Great ");
+    expect(extractor.pushSnapshot('{"spoken":"Great \\uD83D\\uDE00 done."}')).toBe(
+      "\u{1F600} done.",
+    );
   });
 
-  it("falls back to streaming raw plain text once enough buffer accumulates with no spoken key", () => {
-    // Regression: SPOKEN_OUTPUT_RESPONSE_FORMAT's own comment documents this model breaking the
-    // JSON contract on a real, measured fraction of turns (plain prose, no wrapper at all) -
-    // without a fallback the whole turn would stream nothing.
+  it("reports continueConversation even though it arrives after spoken has finished", () => {
     const extractor = createIncrementalSpokenExtractor();
-    const first = extractor.push("Sure, turning off the bedroom ");
-    const second = extractor.push("lights now.");
-    expect(first + second).toBe("Sure, turning off the bedroom lights now.");
+    extractor.pushSnapshot('{"spoken":"Which one?"');
+    expect(extractor.continueConversation()).toBe(false);
+    extractor.pushSnapshot('{"spoken":"Which one?","continueConversation":true}');
+    expect(extractor.continueConversation()).toBe(true);
   });
 
-  it("does not trigger the plain-text fallback while still short enough to plausibly be forming JSON", () => {
+  it("returns nothing for an unchanged snapshot", () => {
     const extractor = createIncrementalSpokenExtractor();
-    // Under PLAIN_TEXT_FALLBACK_MIN_BUFFER's threshold - must wait, not guess.
-    expect(extractor.push('{"spo')).toBe("");
+    extractor.pushSnapshot('{"spoken":"Done."}');
+    expect(extractor.pushSnapshot('{"spoken":"Done."}')).toBe("");
   });
 
-  it("does not trigger the plain-text fallback once the spoken key has actually appeared", () => {
+  it("resyncs quietly when the model replaces its answer mid-flight", () => {
+    // Already-spoken audio cannot be recalled, so a divergent snapshot must not re-emit text
+    // the listener has heard - it just resyncs.
     const extractor = createIncrementalSpokenExtractor();
-    // Long buffer, but it does contain "spoken" - must stay in JSON mode and decode normally,
-    // not misfire into plain-text mode just because the threshold was crossed already.
-    const delta = extractor.push('{"spoken":"This sentence is long enough on its own."}');
-    expect(delta).toBe("This sentence is long enough on its own.");
+    expect(extractor.pushSnapshot('{"spoken":"Five minutes."}')).toBe("Five minutes.");
+    expect(extractor.pushSnapshot('{"spoken":"Ten minutes."}')).toBe("");
+  });
+
+  it("applies pronunciation fixups to streamed deltas", () => {
+    const extractor = createIncrementalSpokenExtractor();
+    expect(extractor.pushSnapshot('{"spoken":"Check the swale after rain."}')).toBe(
+      "Check the swayl after rain.",
+    );
+  });
+
+  it("still respells a word whose snapshot boundary falls inside it", () => {
+    // Found live 2026-08-16: every PRONUNCIATION_FIXUPS rule is \b-anchored, so applying it to a
+    // delta that holds only "swal" matched nothing and the satellite said "swale" while the
+    // returned text said "swayl". The partial word is held back until it is whole.
+    const extractor = createIncrementalSpokenExtractor();
+    const deltas = [
+      '{"spoken":"Check the swal',
+      '{"spoken":"Check the swale afte',
+      '{"spoken":"Check the swale after rain."}',
+    ].map((s) => extractor.pushSnapshot(s));
+    expect(deltas.join("")).toBe("Check the swayl after rain.");
+  });
+
+  it("never emits a partial word mid-stream", () => {
+    const extractor = createIncrementalSpokenExtractor();
+    expect(extractor.pushSnapshot('{"spoken":"Turning off the bedr')).toBe("Turning off the ");
+    expect(extractor.pushSnapshot('{"spoken":"Turning off the bedroom ')).toBe("bedroom ");
+  });
+
+  it("flush releases the held final word when the JSON never closes", () => {
+    // The plain-text fallback has no closing quote to signal completion, so without flush() the
+    // last word of the answer would be held back forever and never spoken.
+    const extractor = createIncrementalSpokenExtractor();
+    const streamed = extractor.pushSnapshot("Sure, turning off the lights now");
+    expect(streamed).toBe("Sure, turning off the lights ");
+    expect(extractor.flush()).toBe("now");
+  });
+
+  it("flush is empty once a closed JSON value already released everything", () => {
+    const extractor = createIncrementalSpokenExtractor();
+    expect(extractor.pushSnapshot('{"spoken":"All done."}')).toBe("All done.");
+    expect(extractor.flush()).toBe("");
   });
 
   it("waits for the spoken key even when continueConversation streams first", () => {
-    // Regression: nothing guarantees the schema's keys stream in declaration order, so a
-    // long-enough buffer with no "spoken" yet must not be mistaken for broken plain text
-    // while it's still visibly a forming JSON object.
     const extractor = createIncrementalSpokenExtractor();
-    expect(extractor.push('{"continueConversation":false,')).toBe("");
-    expect(extractor.push('"spoken":"Lights are on."}')).toBe("Lights are on.");
-    expect(extractor.continueConversation()).toBe(false);
+    expect(extractor.pushSnapshot('{"continueConversation":false,')).toBe("");
+    expect(extractor.pushSnapshot('{"continueConversation":false,"spoken":"Lights are on."}')).toBe(
+      "Lights are on.",
+    );
   });
 
-  it("decodes a differently-cased spoken key, matching the batch path's case-insensitivity", () => {
+  it("decodes a differently-cased spoken key, matching the batch path", () => {
     const extractor = createIncrementalSpokenExtractor();
-    expect(extractor.push('{"Spoken":"Case should not matter."}')).toBe("Case should not matter.");
+    expect(extractor.pushSnapshot('{"Spoken":"Case should not matter."}')).toBe(
+      "Case should not matter.",
+    );
+  });
+
+  it("streams ordinary prose when the model breaks the JSON contract entirely", () => {
+    const extractor = createIncrementalSpokenExtractor();
+    const deltas = snapshots(extractor, [
+      "Sure, turning off the bedroom ",
+      "Sure, turning off the bedroom lights now.",
+    ]);
+    expect(deltas.join("")).toBe("Sure, turning off the bedroom lights now.");
+  });
+
+  it("does not fall back to prose while the snapshot still looks like forming JSON", () => {
+    const extractor = createIncrementalSpokenExtractor();
+    expect(extractor.pushSnapshot('{"spo')).toBe("");
   });
 
   it("streams nothing when contract-breaking prose opens with meta-reasoning", () => {
-    // The batch path strips these paragraphs before anything is spoken; a growing prefix can't
-    // be paragraph-analyzed, and speech can't be retracted once played.
     const extractor = createIncrementalSpokenExtractor();
-    const first = extractor.push("Reasoning: the user wants the ");
-    const second = extractor.push("lights off.\n\nTurning them off now.");
-    expect(first + second).toBe("");
+    const deltas = snapshots(extractor, [
+      "Reasoning: the user wants the ",
+      "Reasoning: the user wants the lights off.\n\nTurning them off now.",
+    ]);
+    expect(deltas.join("")).toBe("");
   });
 
   it("streams nothing when contract-breaking prose contains a code fence", () => {
     const extractor = createIncrementalSpokenExtractor();
-    expect(extractor.push("Here is the config you asked for: ```yaml\nfoo: bar\n```")).toBe("");
-  });
-
-  it("still streams ordinary contract-breaking prose", () => {
-    // The common documented break is a plain conversational sentence - that must still stream,
-    // otherwise the fallback buys nothing on the turns it exists for.
-    const extractor = createIncrementalSpokenExtractor();
-    const first = extractor.push("Sure, turning off the bedroom ");
-    const second = extractor.push("lights now.");
-    expect(first + second).toBe("Sure, turning off the bedroom lights now.");
+    expect(extractor.pushSnapshot("Here is the config you asked for: ```yaml\nfoo: bar\n```")).toBe(
+      "",
+    );
   });
 });

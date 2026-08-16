@@ -33,7 +33,10 @@ function createRequest(params: { accept?: string; body?: unknown }): IncomingMes
 
 /** The shared createMockServerResponse helper only models setHeader/end, so it can't observe
  * streamed writes or the close listener the SSE path registers. */
-function createStreamingResponse(): ServerResponse & { chunks: string[]; headers: Record<string, string> } {
+function createStreamingResponse(): ServerResponse & {
+  chunks: string[];
+  headers: Record<string, string>;
+} {
   const emitter = new EventEmitter();
   const headers: Record<string, string> = {};
   const res = Object.assign(emitter, {
