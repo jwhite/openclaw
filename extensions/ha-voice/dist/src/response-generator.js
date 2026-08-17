@@ -10,7 +10,7 @@
  */
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../api.js";
-import { createIncrementalSpokenExtractor, extractSpokenTextFromPayloads, SPOKEN_OUTPUT_CONTRACT, SPOKEN_OUTPUT_RESPONSE_FORMAT, } from "./spoken-text.js";
+import { createIncrementalSpokenExtractor, extractSpokenTextFromPayloads, SPOKEN_OUTPUT_CONTRACT, } from "./spoken-text.js";
 /**
  * Voice turns are latency-sensitive in a way text chat isn't — a spoken exchange has a real
  * person waiting in a room. Measured 2026-07-29: the inherited default (a large reasoning model)
@@ -95,7 +95,7 @@ export async function generateHaVoiceResponse(params) {
                 `workspace-ensure=${tWorkspaceReady - tAdmitted}ms session-resolve=${tSessionReady - tWorkspaceReady}ms ` +
                 `identity-prompt=${Date.now() - tSessionReady}ms preModelTotal=${Date.now() - tCallStart}ms`);
             // S5.1: streams the answer as it generates, decoded incrementally because the raw stream
-            // is JSON-wrapped (SPOKEN_OUTPUT_RESPONSE_FORMAT), not plain text. Reads the assistant
+            // is JSON-wrapped (SPOKEN_OUTPUT_CONTRACT), not plain text. Reads the assistant
             // stream's *cumulative* text rather than onBlockReply: block-reply chunks are a lossy
             // partition (the chunker drops the whitespace at each break, so rejoining them welds
             // words together and TTS speaks invented words) — see createIncrementalSpokenExtractor.
@@ -181,9 +181,14 @@ export async function generateHaVoiceResponse(params) {
                 extraSystemPrompt,
                 agentDir,
                 abortSignal,
-                // Enforces the spoken-JSON contract at the API layer (see SPOKEN_OUTPUT_RESPONSE_FORMAT's
-                // own comment) — prompt instruction alone was not reliable.
-                streamParams: { responseFormat: SPOKEN_OUTPUT_RESPONSE_FORMAT },
+                // Deliberately no responseFormat. Forcing the spoken contract as a strict
+                // json_schema suppresses tool calls on this provider/model: measured 2026-08-16 over
+                // 10 identical "Play Elvis Presley" turns, the model invoked play_music_on_satellite
+                // 1/10 with the format on and 10/10 with it off — and in the 9 failures it still
+                // claimed the music was playing, so the user heard a confirmation and silence.
+                // Prompt instruction alone holds the JSON contract for 7/8 varied turns, and
+                // extractSpokenTextFromPayloads' plain-text fallback already covers the rest, which
+                // is a far cheaper failure than an assistant that lies about acting.
                 // See RESPONSE_TOOLS_ALLOW's own comment: cuts the model payload from 178 tool
                 // schemas to 4, and skips bundle MCP/LSP runtime construction entirely (neither
                 // runtime is needed for any of these tools). Does not shrink core-plugin-tools'

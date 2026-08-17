@@ -19,29 +19,6 @@ export const SPOKEN_OUTPUT_CONTRACT = [
     "  text makes no request of the user, it is false - however interesting the topic, and however",
     "  much more you could say about it. A complete, informative answer is false.",
 ].join("\n");
-/**
- * Enforces SPOKEN_OUTPUT_CONTRACT's shape at the provider level (OpenAI-Responses-API structured
- * outputs) instead of relying on prompt instruction alone. Verified live 2026-08-06: the model
- * was NOT reliably emitting the JSON contract on plain instruction (raw payloads came back as
- * plain prose, e.g. "Do you like pineapple on pizza?" with no JSON wrapper at all) — this closes
- * that gap at the API layer rather than just wording the prompt more forcefully.
- */
-export const SPOKEN_OUTPUT_RESPONSE_FORMAT = {
-    type: "json_schema",
-    json_schema: {
-        name: "ha_voice_spoken_response",
-        strict: true,
-        schema: {
-            type: "object",
-            properties: {
-                spoken: { type: "string" },
-                continueConversation: { type: "boolean" },
-            },
-            required: ["spoken", "continueConversation"],
-            additionalProperties: false,
-        },
-    },
-};
 function normalizeSpokenText(value) {
     const normalized = value.replace(/\s+/g, " ").trim();
     return normalized.length > 0 ? normalized : null;
@@ -115,9 +92,9 @@ function isLikelyMetaReasoningParagraph(paragraph) {
 }
 /**
  * Fallback signal for when the model breaks SPOKEN_OUTPUT_CONTRACT entirely (plain prose, no JSON
- * wrapper) despite SPOKEN_OUTPUT_RESPONSE_FORMAT's schema enforcement. Verified live 2026-08-06:
- * enforcement is real but not 100% reliable on this provider/model — two of four turns in one
- * real satellite exchange broke contract, and both were genuine questions ending in "?" that
+ * wrapper). Measured 2026-08-16: prompt instruction holds the contract for 7 of 8 varied turns,
+ * so this path is load-bearing rather than theoretical — and the breaks are often genuine
+ * questions ending in "?" that
  * incorrectly closed the mic under the old hard-`false` fallback. Not the primary signal (the
  * model's own JSON field is, when present) — only engaged once structured parsing has already
  * failed, so a stray trailing "?" on a rhetorical pleasantry is a much better failure mode than
