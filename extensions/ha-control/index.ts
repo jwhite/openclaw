@@ -6,6 +6,7 @@ import {
 } from "./api.js";
 import { resolveHaControlPluginConfig, type ResolvedHaControlConfig } from "./src/config.js";
 import { createPlayMusicTool } from "./src/play-music-tool.js";
+import { createPlaybackControlTool } from "./src/playback-control-tool.js";
 import { createSleepTimerTool } from "./src/sleep-timer-tool.js";
 import { createVolumeTool } from "./src/volume-tool.js";
 
@@ -68,6 +69,14 @@ export default definePluginEntry({
       { name: "play_music_on_satellite" },
     );
     api.registerTool(
+      createPlaybackControlTool({
+        baseUrl: resolved.baseUrl,
+        resolveToken: resolveTokenOnce,
+        defaultMediaPlayerEntityId: resolved.defaultMediaPlayerEntityId,
+      }),
+      { name: "control_satellite_playback" },
+    );
+    api.registerTool(
       createVolumeTool({
         baseUrl: resolved.baseUrl,
         resolveToken: resolveTokenOnce,
@@ -84,7 +93,8 @@ export default definePluginEntry({
       { name: "set_sleep_timer" },
     );
     api.logger.info(
-      `[ha-control] registered play_music_on_satellite, set_satellite_volume, set_sleep_timer (target: ${resolved.baseUrl})`,
+      `[ha-control] registered play_music_on_satellite, control_satellite_playback, ` +
+        `set_satellite_volume, set_sleep_timer (target: ${resolved.baseUrl})`,
     );
   },
 });

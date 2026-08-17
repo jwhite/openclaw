@@ -6,7 +6,12 @@
     "onStartup": true
   },
   "contracts": {
-    "tools": ["play_music_on_satellite", "set_satellite_volume", "set_sleep_timer"]
+    "tools": [
+      "play_music_on_satellite",
+      "control_satellite_playback",
+      "set_satellite_volume",
+      "set_sleep_timer"
+    ]
   },
   "configSchema": {
     "type": "object",

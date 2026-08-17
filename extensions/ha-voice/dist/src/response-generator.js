@@ -34,6 +34,7 @@ const RESPONSE_MODEL = "moonshotai/kimi-k2.5";
 const RESPONSE_TOOLS_ALLOW = [
     "web_search",
     "play_music_on_satellite",
+    "control_satellite_playback",
     "set_satellite_volume",
     "set_sleep_timer",
 ];
