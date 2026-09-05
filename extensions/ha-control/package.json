@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/ha-control",
+  "version": "2026.7.1",
+  "private": true,
+  "description": "OpenClaw plugin giving MoaBot a bounded set of Home Assistant service-call actions",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "runtimeExtensions": ["./dist/index.js"]
+  },
+  "dependencies": {
+    "zod": "4.4.3",
+    "typebox": "1.3.3"
+  }
+}

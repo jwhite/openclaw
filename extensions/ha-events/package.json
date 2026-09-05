@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/ha-events",
+  "version": "2026.7.1",
+  "private": true,
+  "description": "OpenClaw Home Assistant event-ingestion plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "runtimeExtensions": ["./dist/index.js"]
+  },
+  "dependencies": {
+    "zod": "4.4.3",
+    "ws": "8.21.0"
+  }
+}

@@ -69,6 +69,9 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
 RUN corepack enable
 
+# This build host's npm reach is flaky (esbuild/native downloads); raise pnpm fetch timeout/retries.
+RUN pnpm config set fetch-timeout 600000 && pnpm config set fetch-retries 10
+
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
@@ -344,7 +347,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
       mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \
+      chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH" && chown node:node /home/node/.cache; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.

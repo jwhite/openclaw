@@ -76,3 +76,6 @@ vendor/
 !vendor/a2ui/renderers/
 !vendor/a2ui/renderers/lit/
 !vendor/a2ui/renderers/lit/**
+
+# RepoQL local index cache holds a live unix socket + 100MB+ DuckDB; breaks the context tar.
+.repoql/
