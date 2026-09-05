@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/ha-voice",
+  "version": "2026.7.1",
+  "private": true,
+  "description": "OpenClaw Home Assistant Voice bridge plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "runtimeExtensions": ["./dist/index.js"]
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.4.3"
+  }
+}
