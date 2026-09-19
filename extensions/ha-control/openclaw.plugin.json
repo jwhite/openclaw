@@ -10,7 +10,8 @@
       "play_music_on_satellite",
       "control_satellite_playback",
       "set_satellite_volume",
-      "set_sleep_timer"
+      "set_sleep_timer",
+      "start_my_day"
     ]
   },
   "configSchema": {
@@ -57,6 +58,14 @@
       "sleepTimerEntityId": {
         "type": "string",
         "description": "The timer helper entity this tool starts/cancels, e.g. timer.sleep_timer. Defined in HA's configuration.yaml (restore: true so it survives a restart); a separate HA automation handles the actual timer.finished -> media_player.media_pause step, not this plugin."
+      },
+      "assistSatelliteEntityId": {
+        "type": "string",
+        "description": "Optional. The assist_satellite entity used by start_my_day to speak the weather. assist_satellite.announce BLOCKS until the speech finishes, which is what keeps the news bulletins from starting underneath it. Defaults to assist_satellite.home_assistant_voice_0aacc1_assist_satellite."
+      },
+      "weatherEntityId": {
+        "type": "string",
+        "description": "Optional. Weather entity read by start_my_day for current conditions, plus weather.get_forecasts for today's high/low. Defaults to weather.forecast_home."
       }
     },
     "required": [

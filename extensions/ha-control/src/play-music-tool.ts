@@ -15,6 +15,7 @@
 import { Type } from "typebox";
 import { jsonResult, stringEnum, type AnyAgentTool } from "../api.js";
 import { callHomeAssistantService } from "./ha-service-client.js";
+import { fetchNewestEpisode, matchKnownFeed } from "./podcast-feeds.js";
 
 const MEDIA_TYPES = ["artist", "album", "track", "playlist", "audiobook", "podcast", "radio"] as const;
 export type PlayMusicMediaType = (typeof MEDIA_TYPES)[number];
@@ -114,6 +115,45 @@ export function createPlayMusicTool(deps: PlayMusicToolDeps): AnyAgentTool {
 
       try {
         const token = await deps.resolveToken();
+
+        // Known news feeds bypass Music Assistant entirely: MA serves a feed cached for up to 24h,
+        // and playing a *podcast* enqueues its whole episode list, so "play the RNZ bulletin" ends
+        // up working backwards through stale bulletins. Resolving the feed here gives exactly one
+        // current episode. Unknown podcasts still fall through to MA search below.
+        if (mediaType === "podcast") {
+          const feed = matchKnownFeed(query);
+          if (feed) {
+            const episode = await fetchNewestEpisode(feed.url);
+            if (!episode) {
+              return jsonResult({
+                ok: false,
+                error: `No episode found in the ${feed.label} feed for "${query}"`,
+              });
+            }
+            await callHomeAssistantService({
+              baseUrl: deps.baseUrl,
+              token,
+              domain: "music_assistant",
+              service: "play_media",
+              data: {
+                entity_id: deps.defaultMediaPlayerEntityId,
+                media_id: episode.url,
+                enqueue: "replace",
+              },
+            });
+            return jsonResult({
+              ok: true,
+              query,
+              mediaType,
+              source: feed.label,
+              title: episode.title,
+              published: episode.published?.toISOString(),
+              singleEpisode: true,
+              entityId: deps.defaultMediaPlayerEntityId,
+            });
+          }
+        }
+
         const mediaUri = await resolveMediaUri(deps, token, query, mediaType);
         if (!mediaUri) {
           return jsonResult({
