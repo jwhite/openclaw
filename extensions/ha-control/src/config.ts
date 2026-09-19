@@ -20,6 +20,9 @@ export const haControlPluginConfigSchema = z
     defaultMediaPlayerEntityId: z.string().trim().min(1),
     musicAssistantConfigEntryId: z.string().trim().min(1),
     sleepTimerEntityId: z.string().trim().min(1),
+    // Optional: only needed by start_my_day. Defaults match the bedroom satellite install.
+    assistSatelliteEntityId: z.string().trim().min(1).optional(),
+    weatherEntityId: z.string().trim().min(1).optional(),
   })
   .strict();
 
@@ -31,7 +34,12 @@ export type ResolvedHaControlConfig = {
   defaultMediaPlayerEntityId: string;
   musicAssistantConfigEntryId: string;
   sleepTimerEntityId: string;
+  assistSatelliteEntityId: string;
+  weatherEntityId: string;
 };
+
+const DEFAULT_ASSIST_SATELLITE = "assist_satellite.home_assistant_voice_0aacc1_assist_satellite";
+const DEFAULT_WEATHER_ENTITY = "weather.forecast_home";
 
 export function resolveHaControlPluginConfig(params: {
   pluginConfig: unknown;
@@ -43,5 +51,7 @@ export function resolveHaControlPluginConfig(params: {
     defaultMediaPlayerEntityId: parsed.defaultMediaPlayerEntityId,
     musicAssistantConfigEntryId: parsed.musicAssistantConfigEntryId,
     sleepTimerEntityId: parsed.sleepTimerEntityId,
+    assistSatelliteEntityId: parsed.assistSatelliteEntityId ?? DEFAULT_ASSIST_SATELLITE,
+    weatherEntityId: parsed.weatherEntityId ?? DEFAULT_WEATHER_ENTITY,
   };
 }

@@ -8,6 +8,7 @@ import { resolveHaControlPluginConfig, type ResolvedHaControlConfig } from "./sr
 import { createPlayMusicTool } from "./src/play-music-tool.js";
 import { createPlaybackControlTool } from "./src/playback-control-tool.js";
 import { createSleepTimerTool } from "./src/sleep-timer-tool.js";
+import { createStartMyDayTool } from "./src/start-my-day-tool.js";
 import { createVolumeTool } from "./src/volume-tool.js";
 
 // `registerTool`'s factory contract (OpenClawPluginToolFactory) returns AnyAgentTool
@@ -92,9 +93,19 @@ export default definePluginEntry({
       }),
       { name: "set_sleep_timer" },
     );
+    api.registerTool(
+      createStartMyDayTool({
+        baseUrl: resolved.baseUrl,
+        resolveToken: resolveTokenOnce,
+        defaultMediaPlayerEntityId: resolved.defaultMediaPlayerEntityId,
+        assistSatelliteEntityId: resolved.assistSatelliteEntityId,
+        weatherEntityId: resolved.weatherEntityId,
+      }),
+      { name: "start_my_day" },
+    );
     api.logger.info(
       `[ha-control] registered play_music_on_satellite, control_satellite_playback, ` +
-        `set_satellite_volume, set_sleep_timer (target: ${resolved.baseUrl})`,
+        `set_satellite_volume, set_sleep_timer, start_my_day (target: ${resolved.baseUrl})`,
     );
   },
 });
