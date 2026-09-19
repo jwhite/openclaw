@@ -4,9 +4,10 @@
 //
 // 1. ORDERING. The agent's spoken text is emitted at the *end* of a turn, but tool calls run
 //    *during* it. So if the model started a podcast and then spoke the weather, the bulletin would
-//    already be playing underneath the speech. `assist_satellite.announce` blocks until the
-//    announcement has finished speaking, so doing announce-then-play inside one tool is the only
-//    way to get weather *then* news.
+//    already be playing underneath the speech. Doing announce-then-play inside one tool is the
+//    only way to get weather *then* news. NOTE: `assist_satellite.announce` does NOT block until
+//    the speech finishes (assumed initially; the weather was heard *over* the first bulletin), so
+//    the tool polls the satellite entity back to idle before starting playback.
 //
 // 2. FRESHNESS. Music Assistant caches a parsed podcast feed for 24h
 //    (`PODCAST_FEED_CACHE_EXPIRATION = 24 * 3600`), and only refreshes it on a library sync — which
@@ -56,6 +57,39 @@ async function getState(
     return null;
   }
   return (await response.json()) as HassState;
+}
+
+/** Waits for the satellite to finish speaking an announcement.
+ *
+ * `assist_satellite.announce` does NOT block until the speech finishes — it returns as soon as the
+ * announcement is accepted (confirmed live 2026-09-19: the weather was spoken *over* the first
+ * bulletin). The satellite entity moves to a non-idle state ("responding"/"announcing") while it
+ * talks, so we poll it back to idle before starting playback.
+ *
+ * Tolerates both orderings: if the announcement has not started yet we wait for it to begin
+ * (up to `settleMs`), and if it never leaves idle we simply proceed rather than hanging. */
+async function waitForAnnouncementToFinish(
+  deps: StartMyDayToolDeps,
+  token: string,
+  opts: { timeoutMs: number; settleMs: number },
+): Promise<"finished" | "never-started" | "timeout"> {
+  const started = Date.now();
+  let sawSpeaking = false;
+  while (Date.now() - started < opts.timeoutMs) {
+    const state = (await getState(deps, token, deps.assistSatelliteEntityId))?.state;
+    const speaking = state !== undefined && state !== "idle" && state !== "unavailable";
+    if (speaking) {
+      sawSpeaking = true;
+    } else if (sawSpeaking) {
+      return "finished";
+    } else if (Date.now() - started > opts.settleMs) {
+      // Never observed it speaking — either the announcement was synchronous after all, or the
+      // entity doesn't reflect it. Either way, don't hold the routine up.
+      return "never-started";
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return "timeout";
 }
 
 function num(value: unknown): number | null {
@@ -212,14 +246,18 @@ export function createStartMyDayTool(deps: StartMyDayToolDeps): AnyAgentTool {
           .filter(Boolean)
           .join(" ");
 
-        // Blocks until the speech finishes — this is what keeps the bulletins from starting
-        // underneath the weather report.
         await callHomeAssistantService({
           baseUrl: deps.baseUrl,
           token,
           domain: "assist_satellite",
           service: "announce",
           data: { entity_id: deps.assistSatelliteEntityId, message },
+        });
+        // The service call returns before the speech does, so wait for the satellite to go quiet.
+        // Without this the first bulletin starts underneath the weather report.
+        const announceOutcome = await waitForAnnouncementToFinish(deps, token, {
+          timeoutMs: 120_000,
+          settleMs: 6_000,
         });
 
         for (const [index, { episode }] of playable.entries()) {
@@ -241,6 +279,7 @@ export function createStartMyDayTool(deps: StartMyDayToolDeps): AnyAgentTool {
         return jsonResult({
           ok: true,
           spokenWeather: message,
+          announceOutcome,
           played: playable.map(({ label, episode }) => ({
             source: label,
             title: episode.title,
