@@ -16,7 +16,7 @@ import { Type } from "typebox";
 import { jsonResult, stringEnum, type AnyAgentTool } from "../api.js";
 import { callHomeAssistantService } from "./ha-service-client.js";
 
-const MEDIA_TYPES = ["artist", "album", "track", "playlist", "audiobook"] as const;
+const MEDIA_TYPES = ["artist", "album", "track", "playlist", "audiobook", "podcast", "radio"] as const;
 export type PlayMusicMediaType = (typeof MEDIA_TYPES)[number];
 
 const SEARCH_RESULT_KEY_BY_MEDIA_TYPE: Record<PlayMusicMediaType, string> = {
@@ -25,6 +25,12 @@ const SEARCH_RESULT_KEY_BY_MEDIA_TYPE: Record<PlayMusicMediaType, string> = {
   track: "tracks",
   playlist: "playlists",
   audiobook: "audiobooks",
+  // Music Assistant's SearchResults fields are not uniformly plural: podcasts are "podcasts"
+  // but radio is the singular "radio". Verified against music_assistant_models.media_items
+  // .SearchResults on the live server (2026-09-19) — guessing "radios" fails silently, since a
+  // missing key just yields no results and looks like "nothing matched".
+  podcast: "podcasts",
+  radio: "radio",
 };
 
 export type PlayMusicToolDeps = {
@@ -40,13 +46,16 @@ export type PlayMusicToolDeps = {
 const PlayMusicToolSchema = Type.Object(
   {
     query: Type.String({
-      description: "What to play — artist, album, song, playlist, or audiobook title.",
+      description:
+        "What to play — artist, album, song, playlist, audiobook, podcast, or radio station.",
     }),
     media_type: Type.Optional(
       stringEnum(MEDIA_TYPES, {
         description:
-          "What kind of thing 'query' names, including 'audiobook' for Audible titles. " +
-          "Defaults to 'track' if unsure.",
+          "What kind of thing 'query' names: 'audiobook' for Audible titles, 'podcast' for " +
+          "news bulletins and shows (plays the latest episode), 'radio' for live stations. " +
+          "Defaults to 'track' if unsure — so ALWAYS set this explicitly for news, bulletins, " +
+          "podcasts and radio, or the request resolves to a song with a similar-sounding name.",
       }),
     ),
   },
@@ -91,9 +100,10 @@ export function createPlayMusicTool(deps: PlayMusicToolDeps): AnyAgentTool {
     name: "play_music_on_satellite",
     label: "Play music on the voice satellite",
     description:
-      'Starts playing music or an audiobook on "Moa Voice Bedroom" via Music Assistant, e.g. ' +
-      "an artist, album, song, playlist, or Audible audiobook title requested by name. Plays " +
-      "immediately, no confirmation needed (low stakes — easily stopped/changed if wrong).",
+      'Starts playback on "Moa Voice Bedroom" via Music Assistant: music, audiobooks, ' +
+      "podcasts (news bulletins) or live radio, requested by name. Set media_type to match what " +
+      "was asked for — a news/bulletin request is media_type 'podcast', a station is 'radio'. " +
+      "Plays immediately, no confirmation needed (low stakes — easily stopped/changed if wrong).",
     parameters: PlayMusicToolSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
       const query = typeof rawParams.query === "string" ? rawParams.query.trim() : "";
