@@ -72,28 +72,155 @@ function readMediaType(value: unknown): PlayMusicMediaType {
 type MusicAssistantSearchResultItem = { uri?: string; name?: string };
 type MusicAssistantSearchResponse = Record<string, MusicAssistantSearchResultItem[] | undefined>;
 
+/** Splits "TITLE by ARTIST" on the LAST " by ".
+ *
+ * Last, not first, because titles containing "by" are common — "By the Way by Red Hot Chili
+ * Peppers", "Stand By Me by Ben E. King". Splitting on the first occurrence mangles both.
+ *
+ * This is only ever a *hypothesis*: "Stand By Me" with no artist at all splits into
+ * "Stand" + "Me", which is nonsense. That is why the caller tries the whole string too and
+ * validates before playing anything. */
+function splitTitleAndArtist(query: string): { title: string; artist: string } | null {
+  const match = /^(.*\S)\s+by\s+(\S.*)$/i.exec(query);
+  if (!match) {
+    return null;
+  }
+  const title = match[1]?.trim() ?? "";
+  const artist = match[2]?.trim() ?? "";
+  return title && artist ? { title, artist } : null;
+}
+
+/** Lowercase, strip accents and punctuation, collapse whitespace — so "Death Cab For Cutie"
+ * and "death cab for cutie" compare equal, and "L.A.B." reduces to "lab". */
+function normalise(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const IGNORED_TOKENS = new Set(["the", "a", "an", "of", "and", "for", "by", "in", "on", "to"]);
+
+function significantTokens(value: string): string[] {
+  return normalise(value)
+    .split(" ")
+    .filter((t) => t.length >= 2 && !IGNORED_TOKENS.has(t));
+}
+
+/** Does `candidate` plausibly answer `wanted`?
+ *
+ * Deliberately lenient — every significant token of the shorter side must appear in the other, so
+ * "Beatles" matches "The Beatles" and a punctuation difference never rejects a correct hit. What it
+ * does reject is a result sharing no meaningful word with the request, which is exactly the failure
+ * this exists to stop: asking for Death Cab for Cutie and being given L.A.B. */
+function plausibleMatch(candidate: string, wanted: string): boolean {
+  const wantedTokens = significantTokens(wanted);
+  const candidateTokens = new Set(significantTokens(candidate));
+  if (wantedTokens.length === 0 || candidateTokens.size === 0) {
+    return false;
+  }
+  const overlap = wantedTokens.filter((t) => candidateTokens.has(t)).length;
+  // One shared token is enough for a single-word request; longer requests need most of theirs.
+  return wantedTokens.length <= 2 ? overlap >= 1 : overlap >= Math.ceil(wantedTokens.length * 0.6);
+}
+
+type SearchAttempt = {
+  /** What goes in Music Assistant's `name` field. */
+  name: string;
+  /** Music Assistant has a dedicated `artist` field; using it is what fixes the combined query. */
+  artist?: string;
+  /** What the result has to resemble to be accepted. */
+  expectTitle: string;
+  expectArtist?: string;
+};
+
+export type ResolvedMedia = { uri: string | null; nearest?: string };
+
+/** Resolves a spoken request to a playable URI, or to nothing with the nearest miss named.
+ *
+ * **Why this is more than one search.** Music Assistant cannot parse "TITLE by ARTIST" — it treats
+ * the whole string as a title. Measured 2026-09-24 against this library:
+ *
+ *   "I Built You A Tower by Death Cab for Cutie"  -> L.A.B III by L.A.B.            (wrong)
+ *   "I Built You A Tower" + artist "Death Cab..." -> I Built You A Tower            (right)
+ *   "I Built You A Tower"                          -> I Built You A Tower            (right)
+ *
+ * The album was in the library the whole time; only the phrasing failed. The previous
+ * implementation took `results[0].uri` with no check, so that wrong album played with no warning —
+ * the worst outcome, because the listener cannot tell what happened or why.
+ *
+ * So: try the split hypothesis using MA's real `artist` field, fall back to the whole string (which
+ * is what rescues "Stand By Me", where the split is nonsense), and **validate before returning**.
+ * A result that resembles nothing that was asked for is reported as a miss, not played. */
 async function resolveMediaUri(
   deps: PlayMusicToolDeps,
   token: string,
   query: string,
   mediaType: PlayMusicMediaType,
-): Promise<string | null> {
-  const response = (await callHomeAssistantService({
-    baseUrl: deps.baseUrl,
-    token,
-    domain: "music_assistant",
-    service: "search",
-    returnResponse: true,
-    data: {
-      config_entry_id: deps.musicAssistantConfigEntryId,
-      name: query,
-      media_type: [mediaType],
-    },
-  })) as MusicAssistantSearchResponse | null;
+): Promise<ResolvedMedia> {
+  const split = splitTitleAndArtist(query);
+  const attempts: SearchAttempt[] = [];
+  if (split) {
+    attempts.push({
+      name: split.title,
+      artist: split.artist,
+      expectTitle: split.title,
+      expectArtist: split.artist,
+    });
+  }
+  attempts.push({ name: query, expectTitle: query });
 
   const key = SEARCH_RESULT_KEY_BY_MEDIA_TYPE[mediaType];
-  const results = response?.[key];
-  return results?.[0]?.uri ?? null;
+  let nearest: string | undefined;
+
+  for (const attempt of attempts) {
+    const response = (await callHomeAssistantService({
+      baseUrl: deps.baseUrl,
+      token,
+      domain: "music_assistant",
+      service: "search",
+      returnResponse: true,
+      data: {
+        config_entry_id: deps.musicAssistantConfigEntryId,
+        name: attempt.name,
+        ...(attempt.artist ? { artist: attempt.artist } : {}),
+        media_type: [mediaType],
+      },
+    })) as MusicAssistantSearchResponse | null;
+
+    const results = response?.[key] ?? [];
+    for (const result of results) {
+      const uri = (result as { uri?: string })?.uri;
+      if (!uri) {
+        continue;
+      }
+      const name = (result as { name?: string })?.name ?? "";
+      const artists = ((result as { artists?: { name?: string }[] })?.artists ?? [])
+        .map((a) => a?.name ?? "")
+        .join(" ");
+      const describe = artists ? `${name} — ${artists}` : name;
+      nearest ??= describe;
+
+      const titleOk = plausibleMatch(name, attempt.expectTitle);
+      const artistOk = attempt.expectArtist
+        ? plausibleMatch(artists, attempt.expectArtist)
+        : true;
+      // An artist-only request ("play Death Cab for Cutie") matches on the artist instead.
+      const artistAnsweredTheTitle =
+        !attempt.expectArtist && plausibleMatch(artists, attempt.expectTitle);
+
+      if ((titleOk || artistAnsweredTheTitle) && artistOk) {
+        return { uri };
+      }
+    }
+  }
+
+  // Something came back, but nothing resembling the request. Say so rather than playing it:
+  // the caller turns this into "I couldn't find X", which is what the listener needs to hear.
+  return { uri: null, nearest };
 }
 
 export function createPlayMusicTool(deps: PlayMusicToolDeps): AnyAgentTool {
@@ -154,11 +281,20 @@ export function createPlayMusicTool(deps: PlayMusicToolDeps): AnyAgentTool {
           }
         }
 
-        const mediaUri = await resolveMediaUri(deps, token, query, mediaType);
+        const resolved = await resolveMediaUri(deps, token, query, mediaType);
+        const mediaUri = resolved.uri;
         if (!mediaUri) {
+          // `nearest` is what the search did return. Handing it back lets the assistant say
+          // "I couldn't find X — I found Y, want that?" instead of silently playing Y, which is
+          // the failure this whole path exists to prevent (2026-09-24: asked for Death Cab for
+          // Cutie, played L.A.B., said nothing).
           return jsonResult({
             ok: false,
             error: `No ${mediaType} match found for "${query}"`,
+            ...(resolved.nearest ? { nearest: resolved.nearest } : {}),
+            tellTheUser: resolved.nearest
+              ? `Say that you could not find "${query}" and name what you found instead: ${resolved.nearest}. Do not play it without asking.`
+              : `Say that you could not find "${query}".`,
           });
         }
 
