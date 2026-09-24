@@ -13,16 +13,25 @@ import { normalizeAgentId } from "../api.js";
 import { createIncrementalSpokenExtractor, extractSpokenTextFromPayloads, SPOKEN_OUTPUT_CONTRACT, } from "./spoken-text.js";
 /**
  * Voice turns are latency-sensitive in a way text chat isn't — a spoken exchange has a real
- * person waiting in a room. Measured 2026-07-29: the inherited default (a large reasoning model)
- * took 16-21s per trivial turn, well past the sub-3-second target, partly from multiple
- * sequential provider round trips per turn. This model is already a configured fallback for the
- * default agent, so it's a known-good choice, not a new dependency.
+ * person waiting in a room. Time-to-first-token is the metric that matters, not total: spoken
+ * text streams to TTS from the first chunk, so TTFT is what the listener actually waits through.
  *
- * Not google/gemini-3-flash-preview: tried first, but Gemini's function-calling API rejected
- * MoaBot's full tool schema outright (`FailoverError: provider rejected the request schema or
- * tool payload`) — Gemini is stricter about JSON Schema shapes (e.g. anyOf) than the OpenAI-
- * compatible providers. Superseded 2026-08-19: RESPONSE_TOOLS_ALLOW cut the payload to 5
- * schemas, which Gemini accepts; measured TTFT 1.11-1.55s vs kimi-k2.5's 2.23-5.50s.
+ * Gemini was rejected here once, and that reasoning is now stale — recorded so it is not
+ * re-applied. It originally failed with `FailoverError: provider rejected the request schema or
+ * tool payload`, because Gemini is stricter about JSON Schema shapes (e.g. anyOf) than the
+ * OpenAI-compatible providers and the voice path was still sending MoaBot's full 178-tool
+ * catalog. RESPONSE_TOOLS_ALLOW cut that to 5 hand-written schemas, and Gemini accepts those.
+ *
+ * Measured 2026-08-19 against this prompt shape and those 5 tools, TTFT per call:
+ *   gemini-3-flash-preview  1.11-1.55s, valid JSON contract, correct tool routing  <- chosen
+ *   moonshotai/kimi-k2.5    2.23-5.50s (previous choice)
+ *   inclusionai/ling-3.0-flash 0.75-0.86s and far cheaper, but a much smaller model;
+ *     held in reserve if Gemini's latency stops being good enough for the quality it buys.
+ *   amazon/nova-lite-v1     leaks <thinking> into spoken content — disqualified.
+ *   qwen/qwen3.7-flash      produced no output at all — disqualified.
+ *
+ * A candidate has to clear three bars, not one: TTFT, emitting SPOKEN_OUTPUT_CONTRACT's JSON,
+ * and routing to tools. Speed alone disqualifies nothing and qualifies nothing.
  */
 const RESPONSE_PROVIDER = "openrouter";
 const RESPONSE_MODEL = "google/gemini-3-flash-preview";
@@ -38,6 +47,30 @@ const RESPONSE_TOOLS_ALLOW = [
     "control_satellite_playback",
     "set_satellite_volume",
     "set_sleep_timer",
+    // Added 2026-09-21. Omitting it silently broke "start my day": the tool exists and is
+    // registered, and MoaBot picks it correctly through the CLI where every tool is offered — but
+    // this allowlist is what a *voice* turn actually sees, so through the satellite the tool did not
+    // exist at all. The model then did the closest thing it could with what it had: started a
+    // podcast with play_music_on_satellite and spoke the weather over the top of it. Instructions in
+    // AGENTS.md cannot fix that; an allowlist is not a preference.
+    // Anything the voice path is meant to be able to do must be listed here.
+    "start_my_day",
+    // Added 2026-09-25. Asked the time at 07:07 NZST, voice answered "It's 7:07 PM" — the model
+    // was inventing it. The system prompt's Temporal Context gives only `Current date` and
+    // `Time zone`, and then says "For the exact current time, use `session_status`" — a tool this
+    // allowlist did not offer. Same class of failure as start_my_day above: the instruction is
+    // sound, the tool simply did not exist for a voice turn. session_status is a native tool, so
+    // it carries none of the per-run MCP cost measured below.
+    "session_status",
+    // Measured 2026-09-21, this same endpoint, one sample each — DO NOT add MCP-bridged tools here:
+    //   6 tools, no MCP:      cold 8.07s, warm 4.51s / 4.39s
+    //   + mempalace_search:   cold 13.19s, warm 6.17s / 5.43s   (+1.0-1.8s on EVERY warm turn,
+    //                         even when the model never calls it)
+    //   turns that used it:   10.19s then 8.87s — the second did not amortize, so the MCP runtime
+    //                         cost is per RUN, not per session. Raising mcp.sessionIdleTtlMs does
+    //                         not help: it only controls idle eviction, and cannot extend a
+    //                         run-owned runtime past run end.
+    // Memory in voice should go through a native tool that calls mempalace over HTTP instead.
 ];
 export async function generateHaVoiceResponse(params) {
     const { coreConfig, agentRuntime, sessionKey, userMessage } = params;
@@ -86,7 +119,28 @@ export async function generateHaVoiceResponse(params) {
             const agentName = identity?.name?.trim() || "assistant";
             const basePrompt = params.responseSystemPrompt ??
                 `You are ${agentName}, answering through a Home Assistant voice satellite. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. You have access to tools - use them when helpful.`;
-            const extraSystemPrompt = `${basePrompt}\n\n${SPOKEN_OUTPUT_CONTRACT}`;
+            // Added 2026-09-25. Core's Temporal Context gives this agent only `Current date` and
+            // `Time zone`, then defers the exact time to `session_status`. The chat path calls that
+            // tool and answers correctly; this fast voice model does not — it reads the nearest ISO
+            // timestamp in context instead, which is UTC. NZ is exactly UTC+12, so 22:01Z was spoken
+            // as "10:01 PM" at 10:01 AM: the digits look right and only the meridiem is wrong, which
+            // reads like a formatting slip and is not one. Adding session_status to the allowlist was
+            // not enough — the tool has to be *called*. Stating local time outright leaves nothing to
+            // misread. Safe to vary per turn: this provider/model reports cacheRead/cacheWrite 0, so
+            // there is no prompt-cache prefix to invalidate.
+            const userTimezone = cfg.agents?.defaults?.userTimezone?.trim() || undefined;
+            const nowLine = `Current local time: ${new Intl.DateTimeFormat("en-NZ", {
+                ...(userTimezone ? { timeZone: userTimezone } : {}),
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+                hour12: true,
+            }).format(new Date())}${userTimezone ? ` (${userTimezone})` : ""}. ` +
+                `Use this when asked the date or time. Do not infer either from any timestamp in context — those are UTC.`;
+            const extraSystemPrompt = `${basePrompt}\n\n${nowLine}\n\n${SPOKEN_OUTPUT_CONTRACT}`;
             const timeoutMs = params.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
             // S2.4 follow-up (2026-08-08): the ~1.9s pre-model window measured via HA's intent-start
             // to openclaw's [model-fetch] start included this plugin's own prep work with no internal
